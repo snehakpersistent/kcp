@@ -89,7 +89,7 @@ jobs:
       - uses: actions/setup-go@v3
         with:
           go-version: v1.17
-      - run: make build ARCH=ppc64le
+      - run: make ARCH="ppc64le" build
 
       # Install kind with a local registry
       - uses: container-tools/kind-action@v1
@@ -116,7 +116,7 @@ jobs:
     - uses: actions/setup-go@v3
       with:
         go-version: v1.17
-    - run: make build ARCH=ppc64le
+    - run: make ARCH="ppc64le" build
 
     # Install kind with a local registry
     - uses: container-tools/kind-action@v1
