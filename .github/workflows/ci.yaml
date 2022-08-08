@@ -48,12 +48,6 @@ jobs:
           LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
           make test-e2e-shared
 
-      - uses: cytopia/upload-artifact-retry-action@v0.1.2
-        if: ${{ always() }}
-        with:
-          name: e2e-shared-server
-          path: /tmp/e2e/**/artifacts/
-
   e2e-sharded:
     name: e2e-sharded
     runs-on: ubuntu-latest
@@ -74,12 +68,6 @@ jobs:
     - run: |-
         LOG_DIR=/tmp/e2e/sharded/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
         make test-e2e-sharded
-
-    - uses: cytopia/upload-artifact-retry-action@v0.1.2
-      if: ${{ always() }}
-      with:
-        name: e2e-sharded
-        path: /tmp/e2e/**/artifacts/
 
   e2e-shared-server-ppc64le:
     name: e2e-shared-server-ppc64le
@@ -102,12 +90,6 @@ jobs:
           LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
           make test-e2e-shared ARCH=ppc64le
 
-      - uses: cytopia/upload-artifact-retry-action@v0.1.2
-        if: ${{ always() }}
-        with:
-          name: e2e-shared-server
-          path: /tmp/e2e/**/artifacts/
-
   e2e-sharded-ppc64le:
     name: e2e-sharded-ppc64le
     runs-on: ubuntu-latest
@@ -128,9 +110,3 @@ jobs:
     - run: |-
         LOG_DIR=/tmp/e2e/sharded/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
         make test-e2e-sharded ARCH=ppc64le
-
-    - uses: cytopia/upload-artifact-retry-action@v0.1.2
-      if: ${{ always() }}
-      with:
-        name: e2e-sharded
-        path: /tmp/e2e/**/artifacts/
