@@ -47,6 +47,7 @@ GOTESTSUM_BIN := gotestsum
 GOTESTSUM := $(abspath $(TOOLS_DIR))/$(GOTESTSUM_BIN)-$(GOTESTSUM_VER)
 
 ARCH := $(subst 64,,$(shell uname -p | sed s/x86_/amd/))64
+OS := linux
 
 KUBE_MAJOR_VERSION := $(shell go mod edit -json | jq '.Require[] | select(.Path == "k8s.io/kubernetes") | .Version' --raw-output | sed 's/v\([0-9]*\).*/\1/')
 KUBE_MINOR_VERSION := $(shell go mod edit -json | jq '.Require[] | select(.Path == "k8s.io/kubernetes") | .Version' --raw-output | sed "s/v[0-9]*\.\([0-9]*\).*/\1/")
@@ -77,7 +78,7 @@ require-%:
 
 build: WHAT ?= ./cmd/...
 build: require-jq require-go require-git ## Build the project
-	go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o bin $(WHAT)
+	go build GOOS=$(OS) GOARCH=$(ARCH) $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o bin $(WHAT)
 .PHONY: build
 
 .PHONY: build-all
@@ -94,7 +95,7 @@ build-kind-images: build-kind-images-ko
 
 install: WHAT ?= ./cmd/...
 install:
-	go install -ldflags="$(LDFLAGS)" $(WHAT)
+	go install GOOS=$(OS) GOARCH=$(ARCH) -ldflags="$(LDFLAGS)" $(WHAT)
 .PHONY: install
 
 $(GOLANGCI_LINT):
@@ -179,7 +180,7 @@ endif
 test-e2e: TEST_ARGS ?=
 test-e2e: WHAT ?= ./test/e2e...
 test-e2e: build-all
-	NO_GORUN=1 $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS)
+	NO_GORUN=1 $(GO_TEST) GOOS=$(OS) GOARCH=$(ARCH) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS)
 
 .PHONY: test-e2e-shared
 ifdef USE_GOTESTSUM
@@ -200,7 +201,7 @@ test-e2e-shared: require-kind build-all build-kind-images
 	NO_GORUN=1 ./bin/test-server --log-file-path="$(LOG_DIR)/kcp.log" $(TEST_SERVER_ARGS) 2>&1 & PID=$$! && echo "PID $$PID" && \
 	trap 'kill -TERM $$PID' TERM INT EXIT && \
 	while [ ! -f "$(WORK_DIR)/.kcp/admin.kubeconfig" ]; do sleep 1; done && \
-	NO_GORUN=1 $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS) \
+	NO_GORUN=1 $(GO_TEST) GOOS=$(OS) GOARCH=$(ARCH) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS) \
 		-args --use-default-kcp-server --syncer-image="$(SYNCER_IMAGE)" --kcp-test-image="$(TEST_IMAGE)" --pcluster-kubeconfig="$(abspath $(WORK_DIR)/.kcp/kind.kubeconfig)" \
 	$(if $(value WAIT),|| { echo "Terminated with $$?"; wait "$$PID"; },)
 
@@ -223,7 +224,7 @@ test-e2e-sharded: require-kind build-all build-kind-images
 	NO_GORUN=1 ./bin/sharded-test-server --v=2 --log-dir-path="$(LOG_DIR)" --work-dir-path="$(WORK_DIR)" $(TEST_SERVER_ARGS) 2>&1 & PID=$$!; echo "PID $$PID" && \
 	trap 'kill -TERM $$PID' TERM INT EXIT && \
 	while [ ! -f "$(WORK_DIR)/.kcp/admin.kubeconfig" ]; do sleep 1; done && \
-	NO_GORUN=1 $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS) \
+	NO_GORUN=1 $(GO_TEST) GOOS=$(OS) GOARCH=$(ARCH) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS) \
 		-args --use-default-kcp-server --root-shard-kubeconfig=$(PWD)/.kcp-0/admin.kubeconfig \
 		--syncer-image="$(SYNCER_IMAGE)" --kcp-test-image="$(TEST_IMAGE)" --pcluster-kubeconfig="$(abspath $(WORK_DIR)/.kcp/kind.kubeconfig)" \
 	$(if $(value WAIT),|| { echo "Terminated with $$?"; wait "$$PID"; },)
