@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	kcpclienthelper "github.com/kcp-dev/apimachinery/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v2"
 	"github.com/stretchr/testify/require"
 
@@ -168,13 +169,12 @@ func TestClusterController(t *testing.T) {
 
 			// clients
 			sourceConfig := source.BaseConfig(t)
-			sourceKubeClusterClient, err := kubernetesclient.NewClusterForConfig(sourceConfig)
-			require.NoError(t, err)
-			sourceWildwestClusterClient, err := wildwestclientset.NewClusterForConfig(sourceConfig)
-			require.NoError(t, err)
+			sourceWsClusterConfig := kcpclienthelper.ConfigWithCluster(sourceConfig, wsClusterName)
 
-			sourceKubeClient := sourceKubeClusterClient.Cluster(wsClusterName)
-			sourceWildwestClient := sourceWildwestClusterClient.Cluster(wsClusterName)
+			sourceKubeClient, err := kubernetesclient.NewForConfig(sourceWsClusterConfig)
+			require.NoError(t, err)
+			sourceWildwestClient, err := wildwestclientset.NewForConfig(sourceWsClusterConfig)
+			require.NoError(t, err)
 
 			syncerFixture := framework.NewSyncerFixture(t, source, wsClusterName,
 				framework.WithExtraResources("cowboys.wildwest.dev"),
@@ -184,7 +184,7 @@ func TestClusterController(t *testing.T) {
 					sinkCrdClient, err := apiextensionsclientset.NewForConfig(config)
 					require.NoError(t, err)
 					t.Log("Installing test CRDs into sink cluster...")
-					fixturewildwest.Create(t, sinkCrdClient.ApiextensionsV1().CustomResourceDefinitions(), metav1.GroupResource{Group: wildwest.GroupName, Resource: "cowboys"})
+					fixturewildwest.Create(t, logicalcluster.Name{}, sinkCrdClient.ApiextensionsV1().CustomResourceDefinitions(), metav1.GroupResource{Group: wildwest.GroupName, Resource: "cowboys"})
 				})).Start(t)
 
 			sinkWildwestClient, err := wildwestclientset.NewForConfig(syncerFixture.DownstreamConfig)

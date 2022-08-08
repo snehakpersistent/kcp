@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/genericcontrolplane"
@@ -86,7 +87,12 @@ func NewServer(c CompletedConfig) (*Server, error) {
 		s.MiniAggregator.GenericAPIServer.LoopbackClientConfig,
 		func(obj interface{}) bool { return true },
 		s.ApiExtensionsSharedInformerFactory.Apiextensions().V1().CustomResourceDefinitions(),
-		indexers.NamespaceScoped(),
+		indexers.AppendOrDie(
+			indexers.NamespaceScoped(),
+			cache.Indexers{
+				indexers.BySyncerFinalizerKey: indexers.IndexBySyncerFinalizerKey,
+			},
+		),
 	)
 	if err != nil {
 		return nil, err
@@ -233,8 +239,9 @@ func (s *Server) Run(ctx context.Context) error {
 			shard := &tenancyv1alpha1.ClusterWorkspaceShard{
 				ObjectMeta: metav1.ObjectMeta{Name: s.Options.Extra.ShardName},
 				Spec: tenancyv1alpha1.ClusterWorkspaceShardSpec{
-					BaseURL:     fmt.Sprintf("https://%v", s.GenericConfig.ExternalAddress),
-					ExternalURL: fmt.Sprintf("https://%v", s.Options.Extra.ShardExternalURL),
+					BaseURL:             fmt.Sprintf("https://%v", s.GenericConfig.ExternalAddress),
+					ExternalURL:         fmt.Sprintf("https://%v", s.Options.Extra.ShardExternalURL),
+					VirtualWorkspaceURL: s.Options.Extra.ShardVirtualWorkspaceURL,
 				},
 			}
 			if _, err := s.RootShardKcpClusterClient.Cluster(tenancyv1alpha1.RootCluster).TenancyV1alpha1().ClusterWorkspaceShards().Create(goContext(ctx), shard, metav1.CreateOptions{}); err != nil {
@@ -268,6 +275,7 @@ func (s *Server) Run(ctx context.Context) error {
 				s.ApiExtensionsClusterClient.Cluster(tenancyv1alpha1.RootCluster).Discovery(),
 				s.DynamicClusterClient.Cluster(tenancyv1alpha1.RootCluster),
 				s.Options.Extra.ShardName,
+				s.Options.Extra.ShardVirtualWorkspaceURL,
 				clientcmdapi.Config{
 					Clusters: map[string]*clientcmdapi.Cluster{
 						// cross-cluster is the virtual cluster running by default
@@ -335,7 +343,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err := s.installSyncTargetHeartbeatController(ctx, controllerConfig); err != nil {
 			return err
 		}
-		if err := s.installVirtualWorkspaceURLsController(ctx, controllerConfig, delegationChainHead); err != nil {
+		if err := s.installSyncTargetController(ctx, controllerConfig, delegationChainHead); err != nil {
 			return err
 		}
 	}

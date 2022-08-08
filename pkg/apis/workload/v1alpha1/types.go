@@ -114,6 +114,10 @@ const (
 	AnnotationSkipDefaultObjectCreation = "workload.kcp.dev/skip-default-object-creation"
 
 	// InternalSyncTargetPlacementAnnotationKey is a internal annotation key on placement API to mark the synctarget scheduled
-	// from this placement. The value is {location workspace}/{syncTarget name}
+	// from this placement. The value is a hash of the SyncTarget workspace + SyncTarget name, generated with the ToSyncTargetKey(..) helper func.
 	InternalSyncTargetPlacementAnnotationKey = "internal.workload.kcp.dev/synctarget"
+
+	// InternalSyncTargetKeyLabel is an internal label set on a SyncTarget resource that contains the full hash of the SyncTargetKey, generated with the ToSyncTargetKey(..)
+	// helper func, this label is used for reverse lookups of a syncTargetKey to SyncTarget.
+	InternalSyncTargetKeyLabel = "internal.workload.kcp.dev/key"
 )

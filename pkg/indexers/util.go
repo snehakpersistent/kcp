@@ -14,25 +14,32 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package indexers
 
 import (
-	"crypto/sha256"
-	"math/big"
+	"fmt"
 
-	"github.com/kcp-dev/logicalcluster/v2"
+	"k8s.io/client-go/tools/cache"
 )
 
-// ToSyncTargetKey hashes the SyncTarget workspace and the SyncTarget name to a string that is used to idenfity
-// in a unique way the synctarget in annotations/labels/finalizers.
-func ToSyncTargetKey(syncTargetWorkspace logicalcluster.Name, syncTargetName string) string {
-	hash := sha256.Sum224([]byte(syncTargetWorkspace.String() + syncTargetName))
-	base62hash := toBase62(hash)
-	return base62hash
+// Append is a helper function that merged a set of indexers.
+func Append(indexers ...cache.Indexers) (cache.Indexers, error) {
+	var ret = cache.Indexers{}
+	for _, ind := range indexers {
+		for k, v := range ind {
+			if _, found := ret[k]; found {
+				return nil, fmt.Errorf("duplicate indexer: %s", k)
+			}
+			ret[k] = v
+		}
+	}
+	return ret, nil
 }
 
-func toBase62(hash [28]byte) string {
-	var i big.Int
-	i.SetBytes(hash[:])
-	return i.Text(62)
+func AppendOrDie(indexers ...cache.Indexers) cache.Indexers {
+	ret, err := Append(indexers...)
+	if err != nil {
+		panic(err)
+	}
+	return ret
 }

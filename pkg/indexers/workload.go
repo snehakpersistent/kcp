@@ -14,25 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package indexers
 
 import (
-	"crypto/sha256"
-	"math/big"
+	"fmt"
 
 	"github.com/kcp-dev/logicalcluster/v2"
+
+	workloadv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
 )
 
-// ToSyncTargetKey hashes the SyncTarget workspace and the SyncTarget name to a string that is used to idenfity
-// in a unique way the synctarget in annotations/labels/finalizers.
-func ToSyncTargetKey(syncTargetWorkspace logicalcluster.Name, syncTargetName string) string {
-	hash := sha256.Sum224([]byte(syncTargetWorkspace.String() + syncTargetName))
-	base62hash := toBase62(hash)
-	return base62hash
-}
+const (
+	SyncTargetsBySyncTargetKey = "SyncTargetsBySyncTargetKey"
+)
 
-func toBase62(hash [28]byte) string {
-	var i big.Int
-	i.SetBytes(hash[:])
-	return i.Text(62)
+func IndexSyncTargetsBySyncTargetKey(obj interface{}) ([]string, error) {
+	syncTarget, ok := obj.(*workloadv1alpha1.SyncTarget)
+	if !ok {
+		return []string{}, fmt.Errorf("obj is supposed to be a workloadv1alpha1.SyncTarget, but is %T", obj)
+	}
+
+	return []string{workloadv1alpha1.ToSyncTargetKey(logicalcluster.From(syncTarget), syncTarget.Name)}, nil
 }

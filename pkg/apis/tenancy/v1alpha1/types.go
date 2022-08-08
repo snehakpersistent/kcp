@@ -477,7 +477,7 @@ type ClusterWorkspaceShardSpec struct {
 	// +optional
 	BaseURL string `json:"baseURL,omitempty"`
 
-	// ExternalURL is the externally visible address presented to users in Workspace URLs.
+	// externalURL is the externally visible address presented to users in Workspace URLs.
 	// Changing this will break all existing workspaces on that shard, i.e. existing
 	// kubeconfigs of clients will be invalid. Hence, when changing this value, the old
 	// URL used by clients must keep working.
@@ -496,6 +496,17 @@ type ClusterWorkspaceShardSpec struct {
 	// +kubebuilder:Required
 	// +required
 	ExternalURL string `json:"externalURL"`
+
+	// virtualWorkspaceURL is the address of the virtual workspace server associated with this shard.
+	// It can be a direct address, an address of a front-proxy or even an address of an LB.
+	// As of today this address is assigned to APIExports.
+	//
+	// This will be defaulted to the shard's base address if not specified.
+	//
+	// +kubebuilder:validation:Format=uri
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	VirtualWorkspaceURL string `json:"virtualWorkspaceURL,omitempty"`
 }
 
 // ClusterWorkspaceShardStatus communicates the observed state of the ClusterWorkspaceShard.
@@ -544,8 +555,10 @@ var (
 	// RootWorkspaceType is the implicit type of the root logical cluster.
 	RootWorkspaceType = &ClusterWorkspaceType{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:                      ObjectName(RootWorkspaceTypeReference.Name),
-			ZZZ_DeprecatedClusterName: RootWorkspaceTypeReference.Path,
+			Name: ObjectName(RootWorkspaceTypeReference.Name),
+			Annotations: map[string]string{
+				logicalcluster.AnnotationKey: RootWorkspaceTypeReference.Path,
+			},
 		},
 		Spec: ClusterWorkspaceTypeSpec{
 			LimitAllowedParents: &ClusterWorkspaceTypeSelector{

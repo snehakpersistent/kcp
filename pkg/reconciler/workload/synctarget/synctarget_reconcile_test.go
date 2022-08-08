@@ -14,12 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package virtualworkspaceurls
+package synctarget
 
 import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/kcp-dev/logicalcluster/v2"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -48,8 +50,10 @@ func TestReconciler(t *testing.T) {
 			},
 			syncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -61,8 +65,13 @@ func TestReconciler(t *testing.T) {
 			},
 			expectedSyncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
+					Labels: map[string]string{
+						"internal.workload.kcp.dev/key": "2Fhhz9cq06pipXqhKzp8wrxSgTVTUzc8fKKqLI",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -110,8 +119,10 @@ func TestReconciler(t *testing.T) {
 			},
 			syncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -123,8 +134,13 @@ func TestReconciler(t *testing.T) {
 			},
 			expectedSyncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
+					Labels: map[string]string{
+						"internal.workload.kcp.dev/key": "2Fhhz9cq06pipXqhKzp8wrxSgTVTUzc8fKKqLI",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -178,8 +194,10 @@ func TestReconciler(t *testing.T) {
 			},
 			syncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -191,8 +209,13 @@ func TestReconciler(t *testing.T) {
 			},
 			expectedSyncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
+					Labels: map[string]string{
+						"internal.workload.kcp.dev/key": "2Fhhz9cq06pipXqhKzp8wrxSgTVTUzc8fKKqLI",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -216,21 +239,26 @@ func TestReconciler(t *testing.T) {
 			workspaceShards: []*workspaceapi.ClusterWorkspaceShard{},
 			syncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
 					EvictAfter:    nil,
 				},
-				Status: workloadv1alpha1.SyncTargetStatus{
-					VirtualWorkspaces: []workloadv1alpha1.VirtualWorkspace{},
-				},
+				Status: workloadv1alpha1.SyncTargetStatus{},
 			},
 			expectedSyncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
+					Labels: map[string]string{
+						"internal.workload.kcp.dev/key": "2Fhhz9cq06pipXqhKzp8wrxSgTVTUzc8fKKqLI",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -254,8 +282,10 @@ func TestReconciler(t *testing.T) {
 			},
 			syncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
@@ -277,8 +307,13 @@ func TestReconciler(t *testing.T) {
 			},
 			expectedSyncTarget: &workloadv1alpha1.SyncTarget{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:                      "test-cluster",
-					ZZZ_DeprecatedClusterName: "demo:root:yourworkspace",
+					Name: "test-cluster",
+					Annotations: map[string]string{
+						logicalcluster.AnnotationKey: "demo:root:yourworkspace",
+					},
+					Labels: map[string]string{
+						"internal.workload.kcp.dev/key": "2Fhhz9cq06pipXqhKzp8wrxSgTVTUzc8fKKqLI",
+					},
 				},
 				Spec: workloadv1alpha1.SyncTargetSpec{
 					Unschedulable: false,
