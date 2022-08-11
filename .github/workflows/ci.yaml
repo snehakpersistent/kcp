@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: uraimo/run-on-arch-action@v2.2.0
-        name: Install dependencies and build Terraform
+        name: E2E Shared KCP tests
         id: build
         with:
           arch: ppc64le
@@ -94,7 +94,6 @@ jobs:
             
             LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
             make test-e2e-shared ARCH=ppc64le
-            
 
   e2e-sharded-ppc64le:
     name: e2e-sharded-ppc64le
@@ -102,7 +101,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: uraimo/run-on-arch-action@v2.2.0
-        name: Install dependencies and build Terraform
+      name: E2E Sharded KCP tests
         id: build
         with:
           arch: ppc64le
