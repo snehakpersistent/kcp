@@ -91,6 +91,7 @@ jobs:
             export PATH=$PATH:/usr/local/go/bin
             go install github.com/google/ko@latest
             go install sigs.k8s.io/kind@v0.14.0
+            export PATH=$PATH:$(go env GOPATH)/bin 
             kind create cluster --image quay.io/mayurwaghmode111/node-ppc64le:ppc64le
             
             LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
@@ -118,6 +119,7 @@ jobs:
           export PATH=$PATH:/usr/local/go/bin
           go install github.com/google/ko@latest
           go install sigs.k8s.io/kind@v0.14.0
+          export PATH=$PATH:$(go env GOPATH)/bin 
           kind create cluster --image quay.io/mayurwaghmode111/node-ppc64le:ppc64le
           
           LOG_DIR=/tmp/e2e/sharded/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
