@@ -74,39 +74,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: uraimo/run-on-arch-action@v2.2.0
+        name: Install dependencies and build Terraform
+        id: build
         with:
-          go-version: v1.17
-      - run: make ARCH="ppc64le" build
-
-      # Install kind with a local registry
-      - uses: container-tools/kind-action@v1
-        name: Kubernetes KinD Cluster w/local registry
-
-      - run: |-
-          go install github.com/google/ko@latest
-
-      - run: |-
-          LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
-          make test-e2e-shared ARCH=ppc64le
+          arch: ppc64le
+          distro: ubuntu20.04
+          
+          run: |
+            apt-get update -y
+            apt-get install wget tar -y
+            
+            #Install Go, Kind
+            wget https://go.dev/dl/go1.17.linux-ppc64le.tar.gz
+            tar -C /usr/local -xzf go1.17.linux-ppc64le.tar.gz
+            go install github.com/google/ko@latest
+            go install sigs.k8s.io/kind@v0.14.0
+            kind create cluster --image quay.io/mayurwaghmode111/node-ppc64le:ppc64le
+            
+            LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
+            make test-e2e-shared ARCH=ppc64le
+            
 
   e2e-sharded-ppc64le:
     name: e2e-sharded-ppc64le
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - uses: actions/setup-go@v3
-      with:
-        go-version: v1.17
-    - run: make ARCH="ppc64le" build
-
-    # Install kind with a local registry
-    - uses: container-tools/kind-action@v1
-      name: Kubernetes KinD Cluster w/local registry
-
-    - run: |-
-        go install github.com/google/ko@latest
-
-    - run: |-
-        LOG_DIR=/tmp/e2e/sharded/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
-        make test-e2e-sharded ARCH=ppc64le
+    - uses: uraimo/run-on-arch-action@v2.2.0
+        name: Install dependencies and build Terraform
+        id: build
+        with:
+          arch: ppc64le
+          distro: ubuntu20.04
+          
+          run: |
+            apt-get update -y
+            apt-get install wget tar -y
+            
+            #Install Go, Kind
+            wget https://go.dev/dl/go1.17.linux-ppc64le.tar.gz
+            tar -C /usr/local -xzf go1.17.linux-ppc64le.tar.gz
+            go install github.com/google/ko@latest
+            go install sigs.k8s.io/kind@v0.14.0
+            kind create cluster --image quay.io/mayurwaghmode111/node-ppc64le:ppc64le
+            
+            LOG_DIR=/tmp/e2e/sharded/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
+            make test-e2e-sharded ARCH=ppc64le
