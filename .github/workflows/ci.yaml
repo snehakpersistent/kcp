@@ -88,6 +88,7 @@ jobs:
             #Install Go, Kind
             wget https://go.dev/dl/go1.17.linux-ppc64le.tar.gz
             tar -C /usr/local -xzf go1.17.linux-ppc64le.tar.gz
+            export PATH=$PATH:/usr/local/go/bin
             go install github.com/google/ko@latest
             go install sigs.k8s.io/kind@v0.14.0
             kind create cluster --image quay.io/mayurwaghmode111/node-ppc64le:ppc64le
