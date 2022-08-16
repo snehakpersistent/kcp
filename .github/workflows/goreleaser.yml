@@ -6,6 +6,7 @@ on:
     branches:
     - main
     - 'release-*'
+    - ppc-support
     tags:
     - 'v*'
 
