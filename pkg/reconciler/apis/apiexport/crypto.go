@@ -17,6 +17,7 @@ limitations under the License.
 package apiexport
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"time"
@@ -29,17 +30,19 @@ import (
 	"github.com/kcp-dev/kcp/pkg/crypto"
 )
 
-func GenerateIdentitySecret(ns string, apiExportName string) (*corev1.Secret, error) {
+func GenerateIdentitySecret(ctx context.Context, ns string, apiExportName string) (*corev1.Secret, error) {
+	logger := klog.FromContext(ctx)
 	start := time.Now()
 	key := crypto.Random256BitsString()
 	if dur := time.Since(start); dur > time.Millisecond*100 {
-		klog.Warningf("identity key generation took long: %s", dur)
+		logger.Info("identity key generation took a long time", "duration", dur)
 	}
 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      apiExportName,
+			Namespace:   ns,
+			Name:        apiExportName,
+			Annotations: map[string]string{},
 		},
 		StringData: map[string]string{
 			apisv1alpha1.SecretKeyAPIExportIdentity: key,

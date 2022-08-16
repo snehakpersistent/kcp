@@ -72,12 +72,15 @@ LDFLAGS := \
 all: build
 .PHONY: all
 
+ldflags:
+	@echo $(LDFLAGS)
+
 .PHONY: require-%
 require-%:
 	@if ! command -v $* 1> /dev/null 2>&1; then echo "$* not found in \$$PATH"; exit 1; fi
 
 build: WHAT ?= ./cmd/...
-build: require-jq require-go require-git ## Build the project
+build: require-jq require-go require-git verify-go-versions ## Build the project
 	GOOS=$(OS) GOARCH=$(ARCH) go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o bin $(WHAT)
 .PHONY: build
 
@@ -180,7 +183,7 @@ endif
 test-e2e: TEST_ARGS ?=
 test-e2e: WHAT ?= ./test/e2e...
 test-e2e: build-all
-	NO_GORUN=1 GOOS=$(OS) GOARCH=$(ARCH) $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS)
+	UNSAFE_E2E_HACK_DISABLE_ETCD_FSYNC=true NO_GORUN=1 GOOS=$(OS) GOARCH=$(ARCH) $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS)
 
 .PHONY: test-e2e-shared
 ifdef USE_GOTESTSUM
@@ -198,7 +201,7 @@ test-e2e-shared: require-kind build-all build-kind-images
 	mkdir -p "$(LOG_DIR)" "$(WORK_DIR)/.kcp"
 	kind get kubeconfig > "$(WORK_DIR)/.kcp/kind.kubeconfig"
 	rm -f "$(WORK_DIR)/.kcp/admin.kubeconfig"
-	NO_GORUN=1 ./bin/test-server --log-file-path="$(LOG_DIR)/kcp.log" $(TEST_SERVER_ARGS) 2>&1 & PID=$$! && echo "PID $$PID" && \
+	UNSAFE_E2E_HACK_DISABLE_ETCD_FSYNC=true NO_GORUN=1 ./bin/test-server --log-file-path="$(LOG_DIR)/kcp.log" $(TEST_SERVER_ARGS) 2>&1 & PID=$$! && echo "PID $$PID" && \
 	trap 'kill -TERM $$PID' TERM INT EXIT && \
 	while [ ! -f "$(WORK_DIR)/.kcp/admin.kubeconfig" ]; do sleep 1; done && \
 	NO_GORUN=1 GOOS=$(OS) GOARCH=$(ARCH) $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS) \
@@ -221,7 +224,7 @@ test-e2e-sharded: require-kind build-all build-kind-images
 	mkdir -p "$(LOG_DIR)" "$(WORK_DIR)/.kcp"
 	kind get kubeconfig > "$(WORK_DIR)/.kcp/kind.kubeconfig"
 	rm -f "$(WORK_DIR)/.kcp/admin.kubeconfig"
-	NO_GORUN=1 ./bin/sharded-test-server --v=2 --log-dir-path="$(LOG_DIR)" --work-dir-path="$(WORK_DIR)" $(TEST_SERVER_ARGS) --number-of-shards=2 2>&1 & PID=$$!; echo "PID $$PID" && \
+	UNSAFE_E2E_HACK_DISABLE_ETCD_FSYNC=true NO_GORUN=1 ./bin/sharded-test-server --v=2 --log-dir-path="$(LOG_DIR)" --work-dir-path="$(WORK_DIR)" $(TEST_SERVER_ARGS) --number-of-shards=2 2>&1 & PID=$$!; echo "PID $$PID" && \
 	trap 'kill -TERM $$PID' TERM INT EXIT && \
 	while [ ! -f "$(WORK_DIR)/.kcp/admin.kubeconfig" ]; do sleep 1; done && \
 	NO_GORUN=1 GOOS=$(OS) GOARCH=$(ARCH) $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS) \
@@ -246,6 +249,10 @@ verify-k8s-deps:
 .PHONY: verify-imports
 verify-imports:
 	hack/verify-imports.sh
+
+.PHONY: verify-go-imports
+verify-go-versions:
+	hack/verify-go-versions.sh
 
 .PHONY: help
 help: ## Show this help.

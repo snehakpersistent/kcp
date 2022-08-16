@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/client-go/discovery"
@@ -57,6 +58,7 @@ import (
 	"github.com/kcp-dev/kcp/pkg/reconciler/apis/apibindingdeletion"
 	"github.com/kcp-dev/kcp/pkg/reconciler/apis/apiexport"
 	"github.com/kcp-dev/kcp/pkg/reconciler/apis/apiresource"
+	"github.com/kcp-dev/kcp/pkg/reconciler/apis/permissionclaimlabel"
 	"github.com/kcp-dev/kcp/pkg/reconciler/kubequota"
 	schedulinglocationstatus "github.com/kcp-dev/kcp/pkg/reconciler/scheduling/location"
 	schedulingplacement "github.com/kcp-dev/kcp/pkg/reconciler/scheduling/placement"
@@ -401,6 +403,7 @@ func (s *Server) installWorkspaceScheduler(ctx context.Context, config *rest.Con
 		s.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
 		tenancyv1alpha1.ClusterWorkspaceTypeReference{Path: "root", Name: "universal"},
 		configuniversal.Bootstrap,
+		sets.NewString(s.Options.Extra.BatteriesIncluded...),
 	)
 	if err != nil {
 		return err
@@ -450,6 +453,7 @@ func (s *Server) installHomeWorkspaces(ctx context.Context, config *rest.Config)
 		s.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
 		tenancyv1alpha1.ClusterWorkspaceTypeReference{Path: "root", Name: "homeroot"},
 		confighomeroot.Bootstrap,
+		sets.NewString(s.Options.Extra.BatteriesIncluded...),
 	)
 	if err != nil {
 		return err
@@ -463,6 +467,7 @@ func (s *Server) installHomeWorkspaces(ctx context.Context, config *rest.Config)
 		s.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
 		tenancyv1alpha1.ClusterWorkspaceTypeReference{Path: "root", Name: "homebucket"},
 		confighomebucket.Bootstrap,
+		sets.NewString(s.Options.Extra.BatteriesIncluded...),
 	)
 	if err != nil {
 		return err
@@ -587,6 +592,28 @@ func (s *Server) installAPIBindingController(ctx context.Context, config *rest.C
 		return err
 	}
 
+	permissionClaimLabelController, err := permissionclaimlabel.NewController(
+		kcpClusterClient,
+		dynamicClusterClient,
+		ddsif,
+		s.KcpSharedInformerFactory.Apis().V1alpha1().APIBindings(),
+		s.KcpSharedInformerFactory.Apis().V1alpha1().APIExports(),
+	)
+	if err != nil {
+		return err
+	}
+
+	permissionClaimLabelResourceController, err := permissionclaimlabel.NewResourceController(
+		kcpClusterClient,
+		dynamicClusterClient,
+		ddsif,
+		s.KcpSharedInformerFactory.Apis().V1alpha1().APIBindings(),
+		s.KcpSharedInformerFactory.Apis().V1alpha1().APIExports(),
+	)
+	if err != nil {
+		return err
+	}
+
 	if err := server.AddPostStartHook("kcp-install-apibinding-controller", func(hookContext genericapiserver.PostStartHookContext) error {
 		// do custom wait logic here because APIExports+APIBindings are special as system CRDs,
 		// and the controllers must run as soon as these two informers are up in order to bootstrap
@@ -603,6 +630,8 @@ func (s *Server) installAPIBindingController(ctx context.Context, config *rest.C
 		}
 
 		go c.Start(goContext(hookContext), 2)
+		go permissionClaimLabelController.Start(goContext(hookContext), 5)
+		go permissionClaimLabelResourceController.Start(goContext(hookContext), 2)
 
 		return nil
 	}); err != nil {

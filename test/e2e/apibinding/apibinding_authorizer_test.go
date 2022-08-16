@@ -169,8 +169,7 @@ func TestAPIBindingAuthorizer(t *testing.T) {
 	require.NoError(t, err, "failed to construct dynamic cluster client for server")
 
 	serviceProviderWorkspaces := []logicalcluster.Name{rbacServiceProviderWorkspace, serviceProvider2Workspace}
-	framework.AdmitWorkspaceAccess(t, ctx, kubeClusterClient, orgClusterName, []string{"user-1"}, nil, []string{"member"})
-	framework.AdmitWorkspaceAccess(t, ctx, kubeClusterClient, orgClusterName, []string{"user-2"}, nil, []string{"access"})
+	framework.AdmitWorkspaceAccess(t, ctx, kubeClusterClient, orgClusterName, []string{"user-1", "user-2"}, nil, []string{"access"})
 
 	// Set up service provider workspace.
 	for _, serviceProviderWorkspace := range serviceProviderWorkspaces {
@@ -318,7 +317,7 @@ func setUpServiceProvider(ctx context.Context, dynamicClusterClient *kcpdynamic.
 	require.NoError(t, err)
 
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(serviceProviderClient.Discovery()))
-	err = helpers.CreateResourceFromFS(ctx, dynamicClusterClient.Cluster(serviceProviderWorkspace), mapper, "apiresourceschema_cowboys.yaml", testFiles)
+	err = helpers.CreateResourceFromFS(ctx, dynamicClusterClient.Cluster(serviceProviderWorkspace), mapper, nil, "apiresourceschema_cowboys.yaml", testFiles)
 	require.NoError(t, err)
 
 	t.Logf("Create an APIExport for it")

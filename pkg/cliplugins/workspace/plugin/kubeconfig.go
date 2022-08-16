@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -30,10 +29,8 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
-	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -58,9 +55,8 @@ type KubeConfig struct {
 	currentContext       string // including override
 	shortWorkspaceOutput bool
 
-	clusterClient  tenancyclient.ClusterInterface
-	personalClient tenancyclient.ClusterInterface
-	modifyConfig   func(newConfig *clientcmdapi.Config) error
+	clusterClient tenancyclient.ClusterInterface
+	modifyConfig  func(newConfig *clientcmdapi.Config) error
 
 	genericclioptions.IOStreams
 }
@@ -103,8 +99,7 @@ func NewKubeConfig(opts *Options) (*KubeConfig, error) {
 		currentContext:       currentContext,
 		shortWorkspaceOutput: opts.ShortWorkspaceOutput,
 
-		clusterClient:  clusterClient,
-		personalClient: &personalClusterClient{clusterConfig},
+		clusterClient: clusterClient,
 		modifyConfig: func(newConfig *clientcmdapi.Config) error {
 			return clientcmd.ModifyConfig(configAccess, *newConfig, true)
 		},
@@ -218,28 +213,43 @@ func (kc *KubeConfig) UseWorkspace(ctx context.Context, name string) (err error)
 		}
 
 		if strings.Contains(name, ":") && cluster.HasPrefix(tenancyv1alpha1.RootCluster) {
-			// absolute logical cluster under root:
+			// e.g. root:something:something
+
+			// first try to get Workspace from parent to potentially get a 404. A 403 in the parent though is
+			// not a blocker to enter the workspace. We will do discovery as a final check below
 			parentClusterName, workspaceName := logicalcluster.New(name).Split()
-			ws, err := kc.personalClient.Cluster(parentClusterName).TenancyV1beta1().Workspaces().Get(ctx, workspaceName, metav1.GetOptions{})
-			if err != nil {
-				return err
+			if _, err := kc.clusterClient.Cluster(parentClusterName).TenancyV1beta1().Workspaces().Get(ctx, workspaceName, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+				return fmt.Errorf("workspace %q not found", name)
 			}
 
-			// intentionally do not check for readiness here
+			groups, err := kc.clusterClient.Cluster(cluster).Discovery().ServerGroups()
+			if err != nil && !apierrors.IsForbidden(err) {
+				return err
+			}
+			if apierrors.IsForbidden(err) || len(groups.Groups) == 0 {
+				return fmt.Errorf("access to workspace %s denied", name)
+			}
 
-			newServerHost = ws.Status.URL
-			workspaceType = &ws.Spec.Type
+			// TODO(sttts): in both the cases of `root` and absolute paths here we assume that the current cluster
+			//              client is talking to the right external URL. This obviously not guaranteed, and hence
+			//              we silently assume that the front-proxy will route to every workspace.
+			//			    We might want to add permanent redirections to the front-proxy if the external
+			//              URL does not match the workspace's shard, and then add redirect support here to
+			//              use the right front-proxy URL in the kubeconfig.
+
+			u.Path = path.Join(u.Path, cluster.Path())
+			newServerHost = u.String()
 		} else if strings.Contains(name, ":") {
 			// e.g. system:something
-			u.Path = path.Join(u.Path, logicalcluster.New(name).Path())
+			u.Path = path.Join(u.Path, cluster.Path())
 			newServerHost = u.String()
 		} else if name == tenancyv1alpha1.RootCluster.String() {
 			// root workspace
-			u.Path = path.Join(u.Path, logicalcluster.New(name).Path())
+			u.Path = path.Join(u.Path, cluster.Path())
 			newServerHost = u.String()
 		} else {
 			// relative logical cluster, get URL from workspace object in current context
-			ws, err := kc.personalClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, name, metav1.GetOptions{})
+			ws, err := kc.clusterClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
@@ -307,25 +317,9 @@ func (kc *KubeConfig) currentWorkspace(ctx context.Context, host string, workspa
 		return nil
 	}
 
-	parentClusterName, workspaceName := clusterName.Split()
-	workspacePrettyName := workspaceName
-	if !parentClusterName.Empty() {
-		if grandParentClusterName, _ := parentClusterName.Split(); grandParentClusterName == tenancyv1alpha1.RootCluster {
-			// We are in a child workspace of a top-level organization workspace.
-			// That's the typical case where personal workspace have been created.
-			ws, err := getWorkspaceFromInternalName(ctx, workspaceName, kc.personalClient.Cluster(parentClusterName))
-			if err == nil {
-				workspacePrettyName = ws.Name
-			}
-		}
-	}
-
 	message := fmt.Sprintf("Current workspace is %q", clusterName)
 	if workspaceType != nil {
 		message += fmt.Sprintf(" (type %q)", workspaceType.String())
-	}
-	if workspaceName != workspacePrettyName {
-		message += fmt.Sprintf(" aliased as %q", workspacePrettyName)
 	}
 	_, err = fmt.Fprintln(kc.Out, message+".")
 	return err
@@ -365,7 +359,7 @@ func (kc *KubeConfig) CreateWorkspace(ctx context.Context, workspaceName string,
 	}
 
 	preExisting := false
-	ws, err := kc.personalClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Create(ctx, &tenancyv1beta1.Workspace{
+	ws, err := kc.clusterClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Create(ctx, &tenancyv1beta1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: workspaceName,
 		},
@@ -382,7 +376,7 @@ func (kc *KubeConfig) CreateWorkspace(ctx context.Context, workspaceName string,
 	}
 	if apierrors.IsAlreadyExists(err) && ignoreExisting {
 		preExisting = true
-		ws, err = kc.personalClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, workspaceName, metav1.GetOptions{})
+		ws, err = kc.clusterClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, workspaceName, metav1.GetOptions{})
 	}
 	if err != nil {
 		return err
@@ -412,7 +406,7 @@ func (kc *KubeConfig) CreateWorkspace(ctx context.Context, workspaceName string,
 
 	// STOP THE BLEEDING: the virtual workspace is still informer based (not good). We have to wait until it shows up.
 	if err := wait.PollImmediate(time.Millisecond*100, time.Second*5, func() (bool, error) {
-		if _, err := kc.personalClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, ws.Name, metav1.GetOptions{}); err != nil {
+		if _, err := kc.clusterClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, ws.Name, metav1.GetOptions{}); err != nil {
 			if apierrors.IsNotFound(err) {
 				return false, nil
 			}
@@ -426,7 +420,7 @@ func (kc *KubeConfig) CreateWorkspace(ctx context.Context, workspaceName string,
 	// wait for being ready
 	if ws.Status.Phase != tenancyv1alpha1.ClusterWorkspacePhaseReady {
 		if err := wait.PollImmediate(time.Millisecond*500, readyWaitTimeout, func() (bool, error) {
-			ws, err = kc.personalClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, ws.Name, metav1.GetOptions{})
+			ws, err = kc.clusterClient.Cluster(currentClusterName).TenancyV1beta1().Workspaces().Get(ctx, ws.Name, metav1.GetOptions{})
 			if err != nil {
 				return false, err
 			}
@@ -453,49 +447,6 @@ func (kc *KubeConfig) CreateWorkspace(ctx context.Context, workspaceName string,
 		}
 	}
 	return nil
-}
-
-// ListWorkspaces outputs the list of workspaces of the current user
-// (kubeconfig user possibly overridden by CLI options).
-func (kc *KubeConfig) ListWorkspaces(ctx context.Context, opts *Options) error {
-	config, err := clientcmd.NewDefaultClientConfig(*kc.startingConfig, kc.overrides).ClientConfig()
-	if err != nil {
-		return err
-	}
-	_, currentClusterName, err := pluginhelpers.ParseClusterURL(config.Host)
-	if err != nil {
-		return fmt.Errorf("current URL %q does not point to cluster workspace", config.Host)
-	}
-
-	result := kc.personalClient.Cluster(currentClusterName).TenancyV1beta1().RESTClient().Get().Resource("workspaces").SetHeader("Accept", strings.Join([]string{
-		fmt.Sprintf("application/json;as=Table;v=%s;g=%s", metav1.SchemeGroupVersion.Version, metav1.GroupName),
-		fmt.Sprintf("application/json;as=Table;v=%s;g=%s", metav1beta1.SchemeGroupVersion.Version, metav1beta1.GroupName),
-		"application/json",
-	}, ",")).Do(ctx)
-
-	var statusCode int
-	if result.StatusCode(&statusCode).Error() != nil {
-		return result.Error()
-	}
-
-	if statusCode != http.StatusOK {
-		rawResult, err := result.Raw()
-		if err != nil {
-			return err
-		}
-		return errors.New(string(rawResult))
-	}
-
-	table, err := result.Get()
-	if err != nil {
-		return err
-	}
-
-	printer := printers.NewTablePrinter(printers.PrintOptions{
-		Wide: true,
-	})
-
-	return printer.PrintObj(table, opts.Out)
 }
 
 func (kc *KubeConfig) CreateContext(ctx context.Context, name string, overwrite bool) error {

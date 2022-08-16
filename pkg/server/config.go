@@ -21,12 +21,14 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 
 	"github.com/kcp-dev/logicalcluster/v2"
 
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apiextensionsexternalversions "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/endpoints/filters"
 	"k8s.io/apiserver/pkg/quota/v1/generic"
@@ -55,6 +57,7 @@ import (
 	"github.com/kcp-dev/kcp/pkg/informer"
 	boostrap "github.com/kcp-dev/kcp/pkg/server/bootstrap"
 	kcpserveroptions "github.com/kcp-dev/kcp/pkg/server/options"
+	"github.com/kcp-dev/kcp/pkg/server/options/batteries"
 	"github.com/kcp-dev/kcp/pkg/server/requestinfo"
 )
 
@@ -79,8 +82,8 @@ type ExtraConfig struct {
 	identityConfig    *rest.Config
 
 	// authentication
-	kcpAdminToken, shardAdminToken string
-	shardAdminTokenHash            []byte
+	kcpAdminToken, shardAdminToken, userToken string
+	shardAdminTokenHash                       []byte
 
 	// clients
 	DynamicClusterClient       dynamic.ClusterInterface
@@ -254,13 +257,25 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 	if err := opts.Authorization.ApplyTo(c.GenericConfig, c.KubeSharedInformerFactory, c.KcpSharedInformerFactory); err != nil {
 		return nil, err
 	}
-	c.kcpAdminToken, c.shardAdminToken, c.shardAdminTokenHash, err = opts.AdminAuthentication.ApplyTo(c.GenericConfig)
+	var userToken string
+	c.kcpAdminToken, c.shardAdminToken, userToken, c.shardAdminTokenHash, err = opts.AdminAuthentication.ApplyTo(c.GenericConfig)
 	if err != nil {
 		return nil, err
+	}
+	if sets.NewString(opts.Extra.BatteriesIncluded...).Has(batteries.User) {
+		c.userToken = userToken
 	}
 
 	if err := opts.GenericControlPlane.Audit.ApplyTo(c.GenericConfig); err != nil {
 		return nil, err
+	}
+
+	var shardVirtualWorkspaceURL *url.URL
+	if !opts.Virtual.Enabled && opts.Extra.ShardVirtualWorkspaceURL != "" {
+		shardVirtualWorkspaceURL, err = url.Parse(opts.Extra.ShardVirtualWorkspaceURL)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// preHandlerChainMux is called before the actual handler chain. Note that BuildHandlerChainFunc below
@@ -301,7 +316,7 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		*c.preHandlerChainMux = append(*c.preHandlerChainMux, mux)
 		apiHandler = mux
 
-		apiHandler = WithWorkspaceProjection(apiHandler)
+		apiHandler = WithWorkspaceProjection(apiHandler, shardVirtualWorkspaceURL)
 		apiHandler = WithClusterAnnotation(apiHandler)
 		apiHandler = WithAuditAnnotation(apiHandler) // Must run before any audit annotation is made
 		apiHandler = WithClusterScope(apiHandler)

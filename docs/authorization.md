@@ -21,13 +21,13 @@ The details are outlined below.
 
 The following authorizers are configured in kcp:
 
-| Authorizer                             | Description                                                                    |
-|----------------------------------------|--------------------------------------------------------------------------------|
-| Top-Level organization authorizer      | checks that the user is allowed to access the organization (access and member) |
-| Workspace content authorizer           | determines additional groups a user gets inside of a workspace                 |
-| API binding authorizer                 | validates the RBAC policy in the api exporters workspace                       |
-| Local Policy authorizer                | validates the RBAC policy in the workspace that is accessed                    |
-| Kubernetes Bootstrap Policy authorizer | validates the RBAC Kubernetes standard policy                                  |
+| Authorizer                             | Description                                                    |
+|----------------------------------------|----------------------------------------------------------------|
+| Top-Level organization authorizer      | checks that the user is allowed to access the organization     |
+| Workspace content authorizer           | determines additional groups a user gets inside of a workspace |
+| API binding authorizer                 | validates the RBAC policy in the api exporters workspace       |
+| Local Policy authorizer                | validates the RBAC policy in the workspace that is accessed    |
+| Kubernetes Bootstrap Policy authorizer | validates the RBAC Kubernetes standard policy                  |
 
 They are related in the following way:
 
@@ -62,7 +62,6 @@ to the top-level org workspace represented by the `ClusterWorkspace` named `org`
 | Verb     | Resource                   | Semantics                                                  |
 |----------|----------------------------|------------------------------------------------------------|
 | `access` | `clusterworkspace/content` | the user can access the organization `root:org`            |
-| `member` | `clusterworkspace/content` | like access, but the user can additional create workspaces |
 
 E.g. the user is bound via a `ClusterRoleBinding` in `root` to a `ClusterRole` of the following shape:
 
@@ -75,18 +74,17 @@ rules:
 - apiGroups:
   - tenancy.kcp.dev
   resources:
-  - clusterworkspaces/content
+  - workspaces/content
   resourceNames:
   - org
   verbs:
   - access
-  - member
 ```
 
 ## Workspace Content authorizer
 
 The workspace content authorizer checks whether the user is granted `admin` or `access` verbs in 
-the parent workspace against the `clusterworkspaces/content` resource with the `resourceNames` of 
+the parent workspace against the `workspaces/content` resource with the `resourceNames` of 
 the workspace being accessed.
 
 If any of the verbs is granted, the associated group is added to the user's attributes
@@ -119,7 +117,7 @@ and executes the subsequent authorizer chain.
 Example:
 
 Given the user accesses `root:org:ws:ws`, the verbs `admin` and `access` are asserted
-against the `clusterworkspaces/content` resource for the `resourceNames: ["ws"]` in the workspace `root:org:ws`.
+against the `workspaces/content` resource for the `resourceNames: ["ws"]` in the workspace `root:org:ws`.
 
 To give a user called "adam" admin access to a workspace `root:org:ws:ws`, beyond having org access using the previous top-level organization authorizer,
 a `ClusterRole` must be created in `root:org:ws` with the following shape:
@@ -134,7 +132,7 @@ rules:
 - apiGroups:
   - tenancy.kcp.dev
   resources:
-  - clusterworkspaces/content
+  - workspaces/content
   resourceNames:
   - ws
   verbs:
@@ -161,7 +159,7 @@ roleRef:
 ### Initializing Workspaces
 
 By default, workspaces are only accessible to a user if they are in `Ready` phase. Workspaces that are initializing
-can be access only by users that are granted `admin` verb on the `clusterworkspaces/content` resource in the
+can be access only by users that are granted `admin` verb on the `workspaces/content` resource in the
 parent workspace.
 
 Service accounts declared within a workspace don't have access to initializing workspaces.

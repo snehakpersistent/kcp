@@ -25,6 +25,7 @@ import (
 
 	"github.com/kcp-dev/logicalcluster/v2"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -128,6 +129,7 @@ func (s *Server) Run(ctx context.Context) error {
 				s.ApiExtensionsClusterClient.Cluster(SystemCRDLogicalCluster),
 				s.ApiExtensionsClusterClient.Cluster(SystemCRDLogicalCluster).Discovery(),
 				s.DynamicClusterClient.Cluster(SystemCRDLogicalCluster),
+				sets.NewString(s.Options.Extra.BatteriesIncluded...),
 			); err != nil {
 				klog.Errorf("failed to bootstrap system CRDs: %v", err)
 				return false, nil // keep trying
@@ -173,6 +175,7 @@ func (s *Server) Run(ctx context.Context) error {
 				s.KcpClusterClient.Cluster(tenancyv1alpha1.RootCluster),
 				s.ApiExtensionsClusterClient.Cluster(tenancyv1alpha1.RootCluster).Discovery(),
 				s.DynamicClusterClient.Cluster(tenancyv1alpha1.RootCluster),
+				sets.NewString(s.Options.Extra.BatteriesIncluded...),
 			); err != nil {
 				// nolint:nilerr
 				klog.Errorf("failed to bootstrap root workspace phase 0: %w", err)
@@ -235,7 +238,6 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			klog.Infof("Finished starting kcp informers for the root shard")
 
-			klog.Info("Creating ClusterWorkspaceShard resource in the root shard")
 			shard := &tenancyv1alpha1.ClusterWorkspaceShard{
 				ObjectMeta: metav1.ObjectMeta{Name: s.Options.Extra.ShardName},
 				Spec: tenancyv1alpha1.ClusterWorkspaceShardSpec{
@@ -244,10 +246,37 @@ func (s *Server) Run(ctx context.Context) error {
 					VirtualWorkspaceURL: s.Options.Extra.ShardVirtualWorkspaceURL,
 				},
 			}
-			if _, err := s.RootShardKcpClusterClient.Cluster(tenancyv1alpha1.RootCluster).TenancyV1alpha1().ClusterWorkspaceShards().Create(goContext(ctx), shard, metav1.CreateOptions{}); err != nil {
-				return err
+
+			if err := wait.PollInfiniteWithContext(goContext(ctx), time.Second, func(ctx context.Context) (bool, error) {
+				klog.Infof("Getting %q ClusterWorkspaceShard from the root shard", shard.Name)
+				existingShard, err := s.RootShardKcpClusterClient.Cluster(tenancyv1alpha1.RootCluster).TenancyV1alpha1().ClusterWorkspaceShards().Get(ctx, shard.Name, metav1.GetOptions{})
+				if err != nil && !errors.IsNotFound(err) {
+					klog.Errorf("failed getting %q ClusterWorkspaceShard from the root workspace, err %v", shard.Name, err)
+					return false, nil
+				}
+				if errors.IsNotFound(err) {
+					klog.Info("Creating ClusterWorkspaceShard resource in the root workspace because it doesn't exist")
+					if _, err := s.RootShardKcpClusterClient.Cluster(tenancyv1alpha1.RootCluster).TenancyV1alpha1().ClusterWorkspaceShards().Create(ctx, shard, metav1.CreateOptions{}); err != nil {
+						klog.Errorf("failed creating %q ClusterWorkspaceShard in the root workspace, err %v", shard.Name, err)
+						return false, nil
+					}
+					klog.Info("Finished creating ClusterWorkspaceShard resource in the root workspace")
+					return true, nil
+				}
+				existingShard.Spec.BaseURL = shard.Spec.BaseURL
+				existingShard.Spec.ExternalURL = shard.Spec.ExternalURL
+				existingShard.Spec.VirtualWorkspaceURL = shard.Spec.VirtualWorkspaceURL
+				if _, err := s.RootShardKcpClusterClient.Cluster(tenancyv1alpha1.RootCluster).TenancyV1alpha1().ClusterWorkspaceShards().Update(ctx, existingShard, metav1.UpdateOptions{}); err != nil {
+					klog.Error("failed updating %q ClusterWorkspaceShard in the root workspace, err %v", shard.Name, err)
+					return false, nil
+				}
+				klog.Infof("Updated %q ClusterWorkspaceShard resource in the root workspace", shard.Name)
+				return true, nil
+			}); err != nil {
+				klog.Errorf("failed reconciling %q ClusterWorkspaceShard resource in the root workspace, err %v", shard.Name, err)
+				// nolint:nilerr
+				return nil // don't klog.Fatal. This only happens when context is cancelled.
 			}
-			klog.Info("Finished creating ClusterWorkspaceShard resource in the root shard")
 		}
 
 		s.KcpSharedInformerFactory.Start(ctx.StopCh)
@@ -291,6 +320,7 @@ func (s *Server) Run(ctx context.Context) error {
 				},
 				logicalcluster.New(s.Options.HomeWorkspaces.HomeRootPrefix).Base(),
 				s.Options.HomeWorkspaces.HomeCreatorGroups,
+				sets.NewString(s.Options.Extra.BatteriesIncluded...),
 			); err != nil {
 				// nolint:nilerr
 				klog.Errorf("failed to bootstrap root workspace phase 1: %w", err)
@@ -417,11 +447,9 @@ func (s *Server) Run(ctx context.Context) error {
 		if err := s.installVirtualWorkspaces(ctx, controllerConfig, delegationChainHead, s.GenericConfig.Authentication, s.GenericConfig.ExternalAddress, s.preHandlerChainMux); err != nil {
 			return err
 		}
-	} else if err := s.installVirtualWorkspacesRedirect(ctx, s.preHandlerChainMux); err != nil {
-		return err
 	}
 
-	if err := s.Options.AdminAuthentication.WriteKubeConfig(s.GenericConfig, s.kcpAdminToken, s.shardAdminToken, s.shardAdminTokenHash); err != nil {
+	if err := s.Options.AdminAuthentication.WriteKubeConfig(s.GenericConfig, s.kcpAdminToken, s.shardAdminToken, s.userToken, s.shardAdminTokenHash); err != nil {
 		return err
 	}
 

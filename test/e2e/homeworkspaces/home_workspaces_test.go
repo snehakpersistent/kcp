@@ -75,7 +75,7 @@ func TestUserHomeWorkspaces(t *testing.T) {
 				t.Logf("Get ~ Home workspace URL for user-2")
 
 				_, err = kcpUser2Client.Cluster(tenancyv1alpha1.RootCluster).TenancyV1beta1().Workspaces().Get(ctx, "~", metav1.GetOptions{})
-				require.EqualError(t, err, `clusterworkspaces.tenancy.kcp.dev "~" is forbidden: User "user-2" cannot create resource "clusterworkspaces/workspace" in API group "tenancy.kcp.dev" at the cluster scope`, "user-2 should not be allowed to get his home workspace even before it exists")
+				require.EqualError(t, err, `workspaces.tenancy.kcp.dev "~" is forbidden: User "user-2" cannot create resource "workspaces" in API group "tenancy.kcp.dev" at the cluster scope`, "user-2 should not be allowed to get his home workspace even before it exists")
 			},
 		},
 		{
@@ -111,7 +111,7 @@ func TestUserHomeWorkspaces(t *testing.T) {
 
 				t.Logf("user-2 doesn't have the right to acces user-1 home workspace")
 				_, err = vwUser2Client.Cluster(homeWorkspaceName).TenancyV1beta1().Workspaces().List(ctx, metav1.ListOptions{})
-				require.EqualError(t, err, `workspaces.tenancy.kcp.dev is forbidden: "list" workspace "" in workspace "root:users:bi:ie:user-1" is not allowed`, "user-1 should be able to create a workspace inside his home workspace even though it doesn't exist")
+				require.EqualError(t, err, `workspaces.tenancy.kcp.dev is forbidden: User "user-2" cannot list resource "workspaces" in API group "tenancy.kcp.dev" at the cluster scope: workspace access not permitted`, "user-1 should be able to create a workspace inside his home workspace even though it doesn't exist")
 			},
 		},
 		{
@@ -126,7 +126,7 @@ func TestUserHomeWorkspaces(t *testing.T) {
 						Name: "workspace1",
 					},
 				}, metav1.CreateOptions{})
-				require.EqualError(t, err, `workspaces.tenancy.kcp.dev is forbidden: "create" workspace "workspace1" in workspace "root:users:bi:ie:user-1" is not allowed`, "user-2 should be not able to trigger the automatic creation of user-1 home")
+				require.EqualError(t, err, `workspaces.tenancy.kcp.dev is forbidden: User "user-2" cannot create resource "workspaces" in API group "tenancy.kcp.dev" at the cluster scope`, "user-2 should be not able to trigger the automatic creation of user-1 home")
 			},
 		},
 		{
@@ -139,7 +139,7 @@ func TestUserHomeWorkspaces(t *testing.T) {
 						Name: "workspace1",
 					},
 				}, metav1.CreateOptions{})
-				require.EqualError(t, err, `clusterworkspaces.tenancy.kcp.dev "~" is forbidden: User "shard-admin" cannot create resource "clusterworkspaces/workspace" in API group "tenancy.kcp.dev" at the cluster scope: workspace access not permitted`, "system:master should be not able to trigger the automatic creation of user-1 home")
+				require.EqualError(t, err, `workspaces.tenancy.kcp.dev "~" is forbidden: User "shard-admin" cannot create resource "workspaces" in API group "tenancy.kcp.dev" at the cluster scope: workspace access not permitted`, "system:master should be not able to trigger the automatic creation of user-1 home")
 			},
 		},
 	}
@@ -168,7 +168,7 @@ func TestUserHomeWorkspaces(t *testing.T) {
 			var virtualPersonalClusterClients []kcpclientset.ClusterInterface
 			for _, ci := range []clientInfo{{Token: "user-1-token"}, {Token: "user-2-token"}} {
 				userConfig := framework.ConfigWithToken(ci.Token, rest.CopyConfig(kcpConfig))
-				virtualPersonalClusterClients = append(virtualPersonalClusterClients, &virtualClusterClient{scope: "personal", config: userConfig})
+				virtualPersonalClusterClients = append(virtualPersonalClusterClients, &virtualClusterClient{config: userConfig})
 				kcpUserClusterClient, err := kcpclientset.NewClusterForConfig(userConfig)
 				require.NoError(t, err)
 				kcpUserClusterClients = append(kcpUserClusterClients, kcpUserClusterClient)
@@ -187,12 +187,11 @@ func TestUserHomeWorkspaces(t *testing.T) {
 }
 
 type virtualClusterClient struct {
-	scope  string
 	config *rest.Config
 }
 
 func (c *virtualClusterClient) Cluster(cluster logicalcluster.Name) kcpclientset.Interface {
 	config := rest.CopyConfig(c.config)
-	config.Host += path.Join(virtualoptions.DefaultRootPathPrefix, "workspaces", cluster.String(), c.scope)
+	config.Host += path.Join(virtualoptions.DefaultRootPathPrefix, "workspaces", cluster.String())
 	return kcpclientset.NewForConfigOrDie(config)
 }
