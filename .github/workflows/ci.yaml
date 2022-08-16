@@ -85,11 +85,15 @@ jobs:
             --volume "/var/run/docker.sock:/var/run/docker.sock"
           
           run: |
-            echo "printing whoami:$(whoami)"   
-            echo "printing socket path...."
-            ls -al /var/run/docker.sock
             apt-get update -y
             apt-get install wget tar gcc -y
+            
+            #Install docker
+            mkdir /root/docker; cd /root/docker
+            wget https://oplab9.parqtec.unicamp.br/pub/ppc64el/docker/version-19.03.7/ubuntu-bionic/docker-ce_19.03.7~3-0~ubuntu-bionic_ppc64el.deb
+            wget https://oplab9.parqtec.unicamp.br/pub/ppc64el/docker/version-19.03.7/ubuntu-bionic/docker-ce-cli_19.03.7~3-0~ubuntu-bionic_ppc64el.deb
+            wget https://oplab9.parqtec.unicamp.br/pub/repository/debian/ppc64el/containerd/containerd-1.6.4-ppc64le.deb
+            dpkg -i docker-ce_19.03.7~3-0~ubuntu-bionic_ppc64el.deb docker-ce-cli_19.03.7~3-0~ubuntu-bionic_ppc64el.deb containerd-1.6.4-ppc64le.deb
             
             #Install Go, Kind
             wget https://go.dev/dl/go1.17.linux-ppc64le.tar.gz
