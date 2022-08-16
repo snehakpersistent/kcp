@@ -86,7 +86,7 @@ jobs:
           
           run: |
             apt-get update -y
-            apt-get install wget tar gcc -y
+            apt-get install wget tar gcc runc iptables libdevmapper1.02.1 -y
             
             #Install docker
             mkdir /root/docker; cd /root/docker
