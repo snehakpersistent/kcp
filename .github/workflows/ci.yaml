@@ -86,7 +86,7 @@ jobs:
           
           run: |
             apt-get update -y
-            apt-get install wget tar gcc git runc iptables libdevmapper1.02.1 make -y
+            apt-get install wget tar gcc git runc iptables libdevmapper1.02.1 make jq -y
             
             #Install docker
             mkdir /root/docker; cd /root/docker
