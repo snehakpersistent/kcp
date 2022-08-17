@@ -86,7 +86,7 @@ jobs:
           
           run: |
             apt-get update -y
-            apt-get install wget tar gcc runc iptables libdevmapper1.02.1 make -y
+            apt-get install wget tar gcc git runc iptables libdevmapper1.02.1 make -y
             
             #Install docker
             mkdir /root/docker; cd /root/docker
@@ -104,6 +104,8 @@ jobs:
             go install sigs.k8s.io/kind@v0.14.0
             export PATH=$PATH:$(go env GOPATH)/bin 
             
+            git clone https://github.com/snehakpersistent/kcp.git && cd kcp
+            git checkout ppc-support
             LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e  \
             make test-e2e ARCH=ppc64le
 
