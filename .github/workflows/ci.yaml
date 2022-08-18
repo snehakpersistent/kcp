@@ -109,7 +109,7 @@ jobs:
             
             git clone https://github.com/snehakpersistent/kcp.git && cd kcp
             git checkout ppc-support
-            make install
+            make install ARCH=ppc64le
             go install ./cmd/...
             export PATH=$PWD/bin:$PATH
             LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e  \
