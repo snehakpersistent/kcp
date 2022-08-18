@@ -46,7 +46,7 @@ jobs:
 
       - run: |-
           LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e COUNT=2 E2E_PARALLELISM=2 \
-          make test-e2e-shared
+          make test-e2e-shared 
 
   e2e-sharded:
     name: e2e-sharded
@@ -96,13 +96,16 @@ jobs:
             wget https://oplab9.parqtec.unicamp.br/pub/repository/debian/ppc64el/containerd/containerd-1.6.4-ppc64le.deb
             dpkg -i docker-ce_20.10.0~3-0~ubuntu-bionic_ppc64el.deb docker-ce-cli_20.10.0~3-0~ubuntu-bionic_ppc64el.deb docker-ce-rootless-extras_20.10.0~3-0~ubuntu-bionic_ppc64el.deb containerd-1.6.4-ppc64le.deb
             
-            #Install Go, Kind
+            #Install Go, Kind, kubectl
             wget https://go.dev/dl/go1.18.linux-ppc64le.tar.gz
             tar -C /usr/local -xzf go1.18.linux-ppc64le.tar.gz
             export PATH=$PATH:/usr/local/go/bin
             go install github.com/google/ko@latest
             go install sigs.k8s.io/kind@v0.14.0
             export PATH=$PATH:$(go env GOPATH)/bin 
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/ppc64le/kubectl"
+            chmod +x kubectl
+            export PATH=$PATH:/root/
             
             git clone https://github.com/snehakpersistent/kcp.git && cd kcp
             git checkout ppc-support
