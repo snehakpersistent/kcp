@@ -109,5 +109,8 @@ jobs:
             
             git clone https://github.com/snehakpersistent/kcp.git && cd kcp
             git checkout ppc-support
+            make install
+            go install ./cmd/...
+            export PATH=$PWD/bin:$PATH
             LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e  \
             make test-e2e ARCH=ppc64le -e TEST_ARGS="-timeout 30m"
