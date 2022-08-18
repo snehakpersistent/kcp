@@ -18,20 +18,15 @@ package apiexport
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	jsonpatch "github.com/evanphx/json-patch"
-	"github.com/google/go-cmp/cmp"
 	"github.com/kcp-dev/logicalcluster/v2"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -51,14 +46,13 @@ import (
 	apislisters "github.com/kcp-dev/kcp/pkg/client/listers/apis/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/indexers"
 	"github.com/kcp-dev/kcp/pkg/logging"
+	"github.com/kcp-dev/kcp/pkg/reconciler/committer"
 )
 
 const (
 	controllerName = "kcp-apiexport"
 
 	DefaultIdentitySecretNamespace = "kcp-system"
-
-	indexAPIExportBySecret = "bySecret"
 )
 
 // NewController returns a new controller for APIExports.
@@ -94,39 +88,18 @@ func NewController(
 		listClusterWorkspaceShards: func() ([]*tenancyv1alpha1.ClusterWorkspaceShard, error) {
 			return clusterWorkspaceShardInformer.Lister().List(labels.Everything())
 		},
+		commit: committer.NewCommitter[*APIExport, *APIExportSpec, *APIExportStatus](kcpClusterClient.ApisV1alpha1().APIExports()),
 	}
 
 	c.getSecret = c.readThroughGetSecret
 
-	if err := apiExportInformer.Informer().AddIndexers(
+	indexers.AddIfNotPresentOrDie(
+		apiExportInformer.Informer().GetIndexer(),
 		cache.Indexers{
-			indexers.IndexAPIExportByIdentity: func(obj interface{}) ([]string, error) {
-				apiExport := obj.(*apisv1alpha1.APIExport)
-				return []string{apiExport.Status.IdentityHash}, nil
-			},
-			indexAPIExportBySecret: func(obj interface{}) ([]string, error) {
-				apiExport := obj.(*apisv1alpha1.APIExport)
-
-				if apiExport.Spec.Identity == nil {
-					return []string{}, nil
-				}
-
-				ref := apiExport.Spec.Identity.SecretRef
-				if ref == nil {
-					return []string{}, nil
-				}
-
-				if ref.Namespace == "" || ref.Name == "" {
-					return []string{}, nil
-				}
-
-				// TODO(ncdc): use future shared key func if we ever create one
-				return []string{ref.Namespace + "/" + clusters.ToClusterAwareKey(logicalcluster.From(apiExport), ref.Name)}, nil
-			},
+			indexers.APIExportByIdentity: indexers.IndexAPIExportByIdentity,
+			indexers.APIExportBySecret:   indexers.IndexAPIExportBySecret,
 		},
-	); err != nil {
-		return nil, err
-	}
+	)
 
 	apiExportInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -169,6 +142,12 @@ func NewController(
 	return c, nil
 }
 
+type APIExport = apisv1alpha1.APIExport
+type APIExportSpec = apisv1alpha1.APIExportSpec
+type APIExportStatus = apisv1alpha1.APIExportStatus
+type Resource = committer.Resource[*APIExportSpec, *APIExportStatus]
+type CommitFunc = func(context.Context, *Resource, *Resource) error
+
 // controller reconciles APIExports. It ensures an export's identity secret exists and is valid.
 type controller struct {
 	queue workqueue.RateLimitingInterface
@@ -189,6 +168,7 @@ type controller struct {
 	createSecret func(ctx context.Context, clusterName logicalcluster.Name, secret *corev1.Secret) error
 
 	listClusterWorkspaceShards func() ([]*tenancyv1alpha1.ClusterWorkspaceShard, error)
+	commit                     CommitFunc
 }
 
 // enqueueAPIBinding enqueues an APIExport .
@@ -231,7 +211,7 @@ func (c *controller) enqueueSecret(obj interface{}) {
 		return
 	}
 
-	apiExportKeys, err := c.apiExportIndexer.IndexKeys(indexAPIExportBySecret, secretKey)
+	apiExportKeys, err := c.apiExportIndexer.IndexKeys(indexers.APIExportBySecret, secretKey)
 	if err != nil {
 		runtime.HandleError(err)
 		return
@@ -315,81 +295,13 @@ func (c *controller) process(ctx context.Context, key string) error {
 	// reconciliation error at the end.
 
 	// If the object being reconciled changed as a result, update it.
-	if err := c.patchIfNeeded(ctx, old, obj); err != nil {
+	oldResource := &Resource{ObjectMeta: old.ObjectMeta, Spec: &old.Spec, Status: &old.Status}
+	newResource := &Resource{ObjectMeta: obj.ObjectMeta, Spec: &obj.Spec, Status: &obj.Status}
+	if err := c.commit(ctx, oldResource, newResource); err != nil {
 		errs = append(errs, err)
 	}
 
 	return utilerrors.NewAggregate(errs)
-}
-
-func (c *controller) patchIfNeeded(ctx context.Context, old, obj *apisv1alpha1.APIExport) error {
-	logger := klog.FromContext(ctx)
-	specOrObjectMetaChanged := !equality.Semantic.DeepEqual(old.Spec, obj.Spec) || !equality.Semantic.DeepEqual(old.ObjectMeta, obj.ObjectMeta)
-	statusChanged := !equality.Semantic.DeepEqual(old.Status, obj.Status)
-
-	if !specOrObjectMetaChanged && !statusChanged {
-		return nil
-	}
-
-	// apiExportForPatch ensures that only the spec/objectMeta fields will be changed
-	// or the status field but never both at the same time.
-	apiExportForPatch := func(apiExport *apisv1alpha1.APIExport) apisv1alpha1.APIExport {
-		var ret apisv1alpha1.APIExport
-		if specOrObjectMetaChanged {
-			ret.ObjectMeta = apiExport.ObjectMeta
-			ret.Spec = apiExport.Spec
-		} else {
-			ret.Status = apiExport.Status
-		}
-		return ret
-	}
-
-	clusterName := logicalcluster.From(old)
-	name := old.Name
-
-	oldForPatch := apiExportForPatch(old)
-	// to ensure they appear in the patch as preconditions
-	oldForPatch.UID = ""
-	oldForPatch.ResourceVersion = ""
-
-	oldData, err := json.Marshal(oldForPatch)
-	if err != nil {
-		return fmt.Errorf("failed to Marshal old data for APIExport %s|%s: %w", clusterName, name, err)
-	}
-
-	newForPatch := apiExportForPatch(obj)
-	// to ensure they appear in the patch as preconditions
-	newForPatch.UID = old.UID
-	newForPatch.ResourceVersion = old.ResourceVersion
-
-	newData, err := json.Marshal(newForPatch)
-	if err != nil {
-		return fmt.Errorf("failed to Marshal new data for APIExport %s|%s: %w", clusterName, name, err)
-	}
-
-	patchBytes, err := jsonpatch.CreateMergePatch(oldData, newData)
-	if err != nil {
-		return fmt.Errorf("failed to create patch for APIExport %s|%s: %w", clusterName, name, err)
-	}
-
-	var subresources []string
-	if statusChanged {
-		subresources = []string{"status"}
-	}
-
-	logger.V(2).Info("patching APIExport", "patch", string(patchBytes))
-	_, err = c.kcpClusterClient.ApisV1alpha1().APIExports().Patch(logicalcluster.WithCluster(ctx, clusterName), obj.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{}, subresources...)
-	if err != nil {
-		return fmt.Errorf("failed to patch APIExport %s|%s: %w", clusterName, name, err)
-	}
-
-	// Despite having patched either just spec/objectMeta or status we should log an error indicating a programming error.
-	if specOrObjectMetaChanged && statusChanged {
-		logger.Info("programmer error: spec and status changed in same reconcile iteration", "diff", cmp.Diff(old, obj))
-		c.enqueueAPIExport(obj) // enqueue again to take care of the spec change, assuming the patch did nothing
-	}
-
-	return nil
 }
 
 func (c *controller) readThroughGetSecret(ctx context.Context, clusterName logicalcluster.Name, ns, name string) (*corev1.Secret, error) {
