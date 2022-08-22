@@ -110,8 +110,10 @@ jobs:
             
             git clone https://github.com/snehakpersistent/kcp.git && cd kcp
             git checkout ppc-support
-            make install ARCH=ppc64le
-            go install ./cmd/...
+            wget https://github.com/kcp-dev/kcp/releases/download/v0.7.8/kcp_0.7.8_linux_ppc64le.tar.gz
+            tar -xvf kcp_0.7.8_linux_ppc64le.tar.gz
+            wget https://github.com/kcp-dev/kcp/releases/download/v0.7.8/kubectl-kcp-plugin_0.7.8_linux_ppc64le.tar.gz
+            tar -xvf kubectl-kcp-plugin_0.7.8_linux_ppc64le.tar.gz
             export PATH=$PWD/bin:$PATH
             LOG_DIR=/tmp/e2e/shared-server/artifacts ARTIFACT_DIR=/tmp/e2e  \
-            make test-e2e ARCH=ppc64le -e TEST_ARGS="-timeout 30m"
+            UNSAFE_E2E_HACK_DISABLE_ETCD_FSYNC=true NO_GORUN=1 GOOS=linux GOARCH=ppc64le go test -e TEST_ARGS="-timeout 30m"
