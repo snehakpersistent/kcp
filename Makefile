@@ -50,7 +50,7 @@ GOTESTSUM_VER := v1.8.1
 GOTESTSUM_BIN := gotestsum
 GOTESTSUM := $(abspath $(TOOLS_DIR))/$(GOTESTSUM_BIN)-$(GOTESTSUM_VER)
 
-ARCH := $(subst 64,,$(shell uname -p | sed s/x86_/amd/))64
+ARCH ?= $(subst 64,,$(shell uname -p | sed s/x86_/amd/))64
 OS := linux
 
 KUBE_MAJOR_VERSION := $(shell go mod edit -json | jq '.Require[] | select(.Path == "k8s.io/kubernetes") | .Version' --raw-output | sed 's/v\([0-9]*\).*/\1/')
