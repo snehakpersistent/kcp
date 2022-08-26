@@ -91,6 +91,7 @@ build: require-jq require-go require-git verify-go-versions ## Build the project
 .PHONY: build-all
 build-all:
 	GOOS=$(OS) GOARCH=$(ARCH) $(MAKE) build WHAT=./cmd/...
+	date
 
 .PHONY: build-kind-images
 build-kind-images-ko: require-ko
@@ -192,9 +193,7 @@ endif
 test-e2e: TEST_ARGS ?=
 test-e2e: WHAT ?= ./test/e2e...
 test-e2e: build-all
-    date
 	UNSAFE_E2E_HACK_DISABLE_ETCD_FSYNC=true NO_GORUN=1 GOOS=$(OS) GOARCH=$(ARCH) $(GO_TEST) -race -count $(COUNT) -p $(E2E_PARALLELISM) -parallel $(E2E_PARALLELISM) $(WHAT) $(TEST_ARGS)
-	date
 
 .PHONY: test-e2e-shared
 ifdef USE_GOTESTSUM
