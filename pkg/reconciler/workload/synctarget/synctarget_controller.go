@@ -38,9 +38,9 @@ import (
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	workloadv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
 	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
-	workspaceinformer "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
-	workloadinformer "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/workload/v1alpha1"
-	tenancylister "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
+	tenancyinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
+	workloadinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/workload/v1alpha1"
+	tenancylisters "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/logging"
 )
 
@@ -48,8 +48,8 @@ const controllerName = "kcp-synctarget-controller"
 
 func NewController(
 	kcpClusterClient kcpclient.Interface,
-	syncTargetInformer workloadinformer.SyncTargetInformer,
-	workspaceShardInformer workspaceinformer.ClusterWorkspaceShardInformer,
+	syncTargetInformer workloadinformers.SyncTargetInformer,
+	workspaceShardInformer tenancyinformers.ClusterWorkspaceShardInformer,
 ) *Controller {
 
 	c := &Controller{
@@ -80,7 +80,7 @@ type Controller struct {
 	queue            workqueue.RateLimitingInterface
 	kcpClusterClient kcpclient.Interface
 
-	workspaceShardLister tenancylister.ClusterWorkspaceShardLister
+	workspaceShardLister tenancylisters.ClusterWorkspaceShardLister
 	syncTargetIndexer    cache.Indexer
 }
 
@@ -209,7 +209,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	if !reflect.DeepEqual(currentSyncTarget.ObjectMeta, newSyncTarget.ObjectMeta) || !reflect.DeepEqual(currentSyncTarget.Spec, newSyncTarget.Spec) {
 		logger.WithValues("patch", string(patchBytes)).V(2).Info("patching SyncTarget")
 		if _, err := c.kcpClusterClient.WorkloadV1alpha1().SyncTargets().Patch(logicalcluster.WithCluster(ctx, logicalcluster.From(currentSyncTarget)), currentSyncTarget.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{}); err != nil {
-			logger.Error(err, "failed to patch sync target: %v", err)
+			logger.Error(err, "failed to patch sync target")
 			return err
 		}
 	}
@@ -217,7 +217,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	if !reflect.DeepEqual(currentSyncTarget.Status, newSyncTarget.Status) {
 		logger.WithValues("patch", string(patchBytes)).V(2).Info("patching SyncTarget status")
 		if _, err := c.kcpClusterClient.WorkloadV1alpha1().SyncTargets().Patch(logicalcluster.WithCluster(ctx, logicalcluster.From(currentSyncTarget)), currentSyncTarget.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{}, "status"); err != nil {
-			logger.Error(err, "failed to patch sync target status: %v", err)
+			logger.Error(err, "failed to patch sync target status")
 			return err
 		}
 	}

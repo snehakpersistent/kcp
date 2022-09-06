@@ -39,7 +39,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	kubescheme "k8s.io/client-go/kubernetes/scheme"
+	kubernetesscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/yaml"
@@ -64,16 +64,13 @@ var fs embed.FS
 // TODO(marun) Is there a way to avoid embedding by determining the
 // path to the file during test execution?
 func WriteTokenAuthFile(t *testing.T) string {
-	dataDir, err := CreateTempDirForTest(t, "data")
-	require.NoError(t, err)
-
 	// This file is expected to be embedded from the package directory.
 	tokensFilename := "auth-tokens.csv"
 
 	data, err := fs.ReadFile(tokensFilename)
 	require.NoError(t, err, "error reading tokens file")
 
-	tokensPath := path.Join(dataDir, tokensFilename)
+	tokensPath := path.Join(t.TempDir(), tokensFilename)
 	tokensFile, err := os.Create(tokensPath)
 	require.NoError(t, err, "failed to create tokens file")
 	defer tokensFile.Close()
@@ -145,11 +142,7 @@ func ScratchDirs(t *testing.T) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	dataDir, err := CreateTempDirForTest(t, "data")
-	if err != nil {
-		return "", "", err
-	}
-	return artifactDir, dataDir, nil
+	return artifactDir, t.TempDir(), nil
 }
 
 func (c *kcpServer) Artifact(t *testing.T, producer func() (runtime.Object, error)) {
@@ -179,7 +172,7 @@ func artifact(t *testing.T, server RunningServer, producer func() (runtime.Objec
 		err = os.MkdirAll(dir, 0755)
 		require.NoError(t, err, "could not create dir")
 
-		gvks, _, err := kubescheme.Scheme.ObjectKinds(data)
+		gvks, _, err := kubernetesscheme.Scheme.ObjectKinds(data)
 		if err != nil {
 			gvks, _, err = kcpscheme.Scheme.ObjectKinds(data)
 		}

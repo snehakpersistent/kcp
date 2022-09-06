@@ -35,7 +35,7 @@ import (
 	"k8s.io/klog/v2"
 
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
-	kcpclientset "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
+	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 )
 
 func init() {
@@ -107,7 +107,7 @@ func registerFlags(c *testConfig) {
 // workspace plugin with --kubeconfig.
 func WriteLogicalClusterConfig(t *testing.T, rawConfig clientcmdapi.Config, contextName string, clusterName logicalcluster.Name) (clientcmd.ClientConfig, string) {
 	logicalRawConfig := LogicalClusterRawConfig(rawConfig, clusterName, contextName)
-	artifactDir, err := CreateTempDirForTest(t, "artifacts")
+	artifactDir, _, err := ScratchDirs(t)
 	require.NoError(t, err)
 	pathSafeClusterName := strings.ReplaceAll(clusterName.String(), ":", "_")
 	kubeconfigPath := filepath.Join(artifactDir, fmt.Sprintf("%s.kubeconfig", pathSafeClusterName))
@@ -118,7 +118,7 @@ func WriteLogicalClusterConfig(t *testing.T, rawConfig clientcmdapi.Config, cont
 }
 
 // ShardConfig returns a rest config that talk directly to the given shard.
-func ShardConfig(t *testing.T, kcpClusterClient kcpclientset.Interface, shardName string, cfg *rest.Config) *rest.Config {
+func ShardConfig(t *testing.T, kcpClusterClient kcpclient.Interface, shardName string, cfg *rest.Config) *rest.Config {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	t.Cleanup(cancelFunc)
 

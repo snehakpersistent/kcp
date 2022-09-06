@@ -32,10 +32,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/watch"
 	kuser "k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	rbacinformers "k8s.io/client-go/informers/rbac/v1"
-	"k8s.io/client-go/kubernetes"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/printers"
 	printerstorage "k8s.io/kubernetes/pkg/printers/storage"
@@ -44,7 +45,7 @@ import (
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	tenancyv1beta1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1beta1"
 	"github.com/kcp-dev/kcp/pkg/authorization/delegated"
-	kcpclientset "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
+	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	workspaceauth "github.com/kcp-dev/kcp/pkg/virtual/workspaces/authorization"
 	workspacecache "github.com/kcp-dev/kcp/pkg/virtual/workspaces/cache"
 	workspaceprinters "github.com/kcp-dev/kcp/pkg/virtual/workspaces/printers"
@@ -77,8 +78,8 @@ type REST struct {
 	// crbInformer allows listing or searching for RBAC cluster role bindings through all orgs
 	crbInformer rbacinformers.ClusterRoleBindingInformer
 
-	kubeClusterClient kubernetes.ClusterInterface
-	kcpClusterClient  kcpclientset.ClusterInterface
+	kubeClusterClient kubernetesclient.ClusterInterface
+	kcpClusterClient  kcpclient.ClusterInterface
 
 	// clusterWorkspaceCache is a global cache of cluster workspaces (for all orgs) used by the watcher.
 	clusterWorkspaceCache *workspacecache.ClusterWorkspaceCache
@@ -100,8 +101,8 @@ var _ rest.GracefulDeleter = &REST{}
 // NewREST returns a RESTStorage object that will work against ClusterWorkspace resources in
 // org workspaces, projecting them to the Workspace type.
 func NewREST(
-	kubeClusterClient kubernetes.ClusterInterface,
-	kcpClusterClient kcpclientset.ClusterInterface,
+	kubeClusterClient kubernetesclient.ClusterInterface,
+	kcpClusterClient kcpclient.ClusterInterface,
 	clusterWorkspaceCache *workspacecache.ClusterWorkspaceCache,
 	wilcardsCRBInformer rbacinformers.ClusterRoleBindingInformer,
 	getFilteredClusterWorkspaces func(orgClusterName logicalcluster.Name) FilteredClusterWorkspaces,
@@ -145,6 +146,27 @@ func (s *REST) NamespaceScoped() bool {
 	return false
 }
 
+func (s *REST) canGetAll(ctx context.Context, cluster logicalcluster.Name, user kuser.Info) (bool, error) {
+	clusterAuthorizer, err := s.delegatedAuthz(cluster, s.kubeClusterClient)
+	if err != nil {
+		return false, err
+	}
+	adminWorkspaceAttr := authorizer.AttributesRecord{
+		User:            user,
+		Verb:            "get",
+		APIGroup:        tenancyv1beta1.SchemeGroupVersion.Group,
+		APIVersion:      tenancyv1beta1.SchemeGroupVersion.Version,
+		Resource:        "workspaces",
+		Name:            "", // all
+		ResourceRequest: true,
+	}
+	decision, _, err := clusterAuthorizer.Authorize(ctx, adminWorkspaceAttr)
+	if err != nil {
+		return false, err
+	}
+	return decision == authorizer.DecisionAllow, nil
+}
+
 // List retrieves a list of Workspaces that match label.
 func (s *REST) List(ctx context.Context, options *metainternal.ListOptions) (runtime.Object, error) {
 	userInfo, ok := apirequest.UserFrom(ctx)
@@ -154,7 +176,19 @@ func (s *REST) List(ctx context.Context, options *metainternal.ListOptions) (run
 	orgClusterName := ctx.Value(WorkspacesOrgKey).(logicalcluster.Name)
 
 	clusterWorkspaceList := &tenancyv1alpha1.ClusterWorkspaceList{}
-	if clusterWorkspaces := s.getFilteredClusterWorkspaces(orgClusterName); clusterWorkspaces != nil {
+	if canGetAll, err := s.canGetAll(ctx, orgClusterName, userInfo); err != nil {
+		return nil, err
+	} else if canGetAll {
+		v1Opts := metav1.ListOptions{}
+		if err := metainternal.Convert_internalversion_ListOptions_To_v1_ListOptions(options, &v1Opts, nil); err != nil {
+			return nil, err
+		}
+		var err error
+		clusterWorkspaceList, err = s.kcpClusterClient.Cluster(orgClusterName).TenancyV1alpha1().ClusterWorkspaces().List(ctx, v1Opts)
+		if err != nil {
+			return nil, err
+		}
+	} else if clusterWorkspaces := s.getFilteredClusterWorkspaces(orgClusterName); clusterWorkspaces != nil {
 		// TODO:
 		// The workspaceLister is informer driven, so it's important to note that the lister can be stale.
 		// It breaks the API guarantees of lists.
@@ -187,6 +221,21 @@ func (s *REST) Watch(ctx context.Context, options *metainternal.ListOptions) (wa
 	}
 
 	orgClusterName := ctx.Value(WorkspacesOrgKey).(logicalcluster.Name)
+
+	if canGetAll, err := s.canGetAll(ctx, orgClusterName, userInfo); err != nil {
+		return nil, err
+	} else if canGetAll {
+		v1Opts := metav1.ListOptions{}
+		if err := metainternal.Convert_internalversion_ListOptions_To_v1_ListOptions(options, &v1Opts, nil); err != nil {
+			return nil, err
+		}
+		w, err := s.kcpClusterClient.Cluster(orgClusterName).TenancyV1alpha1().ClusterWorkspaces().Watch(ctx, v1Opts)
+		if err != nil {
+			return nil, err
+		}
+		return withProjection{delegate: w, ch: make(chan watch.Event)}, nil
+	}
+
 	clusterWorkspaces := s.getFilteredClusterWorkspaces(orgClusterName)
 
 	includeAllExistingProjects := (options != nil) && options.ResourceVersion == "0"
@@ -369,4 +418,35 @@ func (s *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	}
 
 	return nil, false, errorToReturn
+}
+
+type withProjection struct {
+	delegate watch.Interface
+	ch       chan watch.Event
+}
+
+func (w withProjection) ResultChan() <-chan watch.Event {
+	ch := w.delegate.ResultChan()
+
+	go func() {
+		for ev := range ch {
+			if ev.Object == nil {
+				w.ch <- ev
+				continue
+			}
+			if cws, ok := ev.Object.(*tenancyv1alpha1.ClusterWorkspace); ok {
+				ws := &tenancyv1beta1.Workspace{}
+				projection.ProjectClusterWorkspaceToWorkspace(cws, ws)
+				ev.Object = ws
+			}
+			w.ch <- ev
+		}
+	}()
+
+	return w.ch
+}
+
+func (w withProjection) Stop() {
+	defer close(w.ch)
+	w.delegate.Stop()
 }

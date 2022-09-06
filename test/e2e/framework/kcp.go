@@ -41,14 +41,15 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
 
-	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apierrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	kubernetesclientset "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	kubernetesclient "k8s.io/client-go/kubernetes"
+	kubernetesscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -212,9 +213,9 @@ type kcpConfig struct {
 
 // kcpServer exposes a kcp invocation to a test and
 // ensures the following semantics:
-//  - the server will run only until the test deadline
-//  - all ports and data directories are unique to support
-//    concurrent execution within a test case and across tests
+//   - the server will run only until the test deadline
+//   - all ports and data directories are unique to support
+//     concurrent execution within a test case and across tests
 type kcpServer struct {
 	name        string
 	args        []string
@@ -263,6 +264,7 @@ func newKcpServer(t *testing.T, cfg kcpConfig, artifactDir, dataDir string) (*kc
 			"--embedded-etcd-peer-port=" + etcdPeerPort,
 			"--embedded-etcd-wal-size-bytes=" + strconv.Itoa(5*1000), // 5KB
 			"--kubeconfig-path=" + filepath.Join(dataDir, "admin.kubeconfig"),
+			"--feature-gates=" + fmt.Sprintf("%s", utilfeature.DefaultFeatureGate),
 		},
 			cfg.Args...),
 		dataDir:     dataDir,
@@ -555,16 +557,18 @@ func (c *kcpServer) config(context string) (*rest.Config, error) {
 func (c *kcpServer) BaseConfig(t *testing.T) *rest.Config {
 	cfg, err := c.config("base")
 	require.NoError(t, err)
-	cfg = kcpclienthelper.NewClusterConfig(cfg)
-	return rest.AddUserAgent(rest.CopyConfig(cfg), t.Name())
+	cfg = rest.CopyConfig(cfg)
+	cfg = kcpclienthelper.SetMultiClusterRoundTripper(cfg)
+	return rest.AddUserAgent(cfg, t.Name())
 }
 
 // RootShardSystemMasterBaseConfig returns a rest.Config for the "system:admin" context. Client-side throttling is disabled (QPS=-1).
 func (c *kcpServer) RootShardSystemMasterBaseConfig(t *testing.T) *rest.Config {
 	cfg, err := c.config("system:admin")
 	require.NoError(t, err)
-	cfg = kcpclienthelper.NewClusterConfig(cfg)
-	return rest.AddUserAgent(rest.CopyConfig(cfg), t.Name())
+	cfg = rest.CopyConfig(cfg)
+	cfg = kcpclienthelper.SetMultiClusterRoundTripper(cfg)
+	return rest.AddUserAgent(cfg, t.Name())
 }
 
 // RawConfig exposes a copy of the client config for this server.
@@ -594,7 +598,7 @@ func (c *kcpServer) Ready(keepMonitoring bool) error {
 		return fmt.Errorf("failed to read client configuration: %w", err)
 	}
 	if cfg.NegotiatedSerializer == nil {
-		cfg.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
+		cfg.NegotiatedSerializer = kubernetesscheme.Codecs.WithoutConversion()
 	}
 	client, err := rest.UnversionedRESTClientFor(cfg)
 	if err != nil {
@@ -785,7 +789,7 @@ func NewFakeWorkloadServer(t *testing.T, server RunningServer, org logicalcluste
 	downstreamConfig := fakeServer.BaseConfig(t)
 
 	// Install the deployment crd in the fake cluster to allow creation of the syncer deployment.
-	crdClient, err := apiextensionsclientset.NewForConfig(downstreamConfig)
+	crdClient, err := apiextensionsclient.NewForConfig(downstreamConfig)
 	require.NoError(t, err)
 	kubefixtures.Create(t, crdClient.ApiextensionsV1().CustomResourceDefinitions(),
 		metav1.GroupResource{Group: "apps.k8s.io", Resource: "deployments"},
@@ -794,7 +798,7 @@ func NewFakeWorkloadServer(t *testing.T, server RunningServer, org logicalcluste
 	// Wait for the deployment crd to become ready
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	t.Cleanup(cancelFunc)
-	kubeClient, err := kubernetesclientset.NewForConfig(downstreamConfig)
+	kubeClient, err := kubernetesclient.NewForConfig(downstreamConfig)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		_, err := kubeClient.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
@@ -830,7 +834,7 @@ func (s *unmanagedKCPServer) BaseConfig(t *testing.T) *rest.Config {
 	defaultConfig, err := config.ClientConfig()
 	require.NoError(t, err)
 
-	wrappedCfg := kcpclienthelper.NewClusterConfig(defaultConfig)
+	wrappedCfg := kcpclienthelper.SetMultiClusterRoundTripper(rest.CopyConfig(defaultConfig))
 	wrappedCfg.QPS = -1
 
 	return wrappedCfg
@@ -846,7 +850,7 @@ func (s *unmanagedKCPServer) RootShardSystemMasterBaseConfig(t *testing.T) *rest
 	defaultConfig, err := config.ClientConfig()
 	require.NoError(t, err)
 
-	wrappedCfg := kcpclienthelper.NewClusterConfig(defaultConfig)
+	wrappedCfg := kcpclienthelper.SetMultiClusterRoundTripper(rest.CopyConfig(defaultConfig))
 	wrappedCfg.QPS = -1
 
 	return wrappedCfg

@@ -36,8 +36,8 @@ import (
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	"k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/client-go/dynamic"
-	coreexternalversions "k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
+	kubernetesinformers "k8s.io/client-go/informers"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -49,15 +49,18 @@ import (
 
 	kcpadmissioninitializers "github.com/kcp-dev/kcp/pkg/admission/initializers"
 	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/authorization"
 	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
-	kcpexternalversions "github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
+	kcpinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
 	"github.com/kcp-dev/kcp/pkg/embeddedetcd"
+	kcpfeatures "github.com/kcp-dev/kcp/pkg/features"
 	"github.com/kcp-dev/kcp/pkg/indexers"
 	"github.com/kcp-dev/kcp/pkg/informer"
 	boostrap "github.com/kcp-dev/kcp/pkg/server/bootstrap"
 	kcpserveroptions "github.com/kcp-dev/kcp/pkg/server/options"
 	"github.com/kcp-dev/kcp/pkg/server/options/batteries"
 	"github.com/kcp-dev/kcp/pkg/server/requestinfo"
+	"github.com/kcp-dev/kcp/pkg/tunneler"
 )
 
 type Config struct {
@@ -86,7 +89,8 @@ type ExtraConfig struct {
 
 	// clients
 	DynamicClusterClient       dynamic.ClusterInterface
-	KubeClusterClient          kubernetes.ClusterInterface
+	KubeClusterClient          kubernetesclient.ClusterInterface
+	DeepSARClient              kubernetesclient.ClusterInterface
 	ApiExtensionsClusterClient apiextensionsclient.ClusterInterface
 	KcpClusterClient           kcpclient.ClusterInterface
 	RootShardKcpClusterClient  kcpclient.ClusterInterface
@@ -96,8 +100,8 @@ type ExtraConfig struct {
 	quotaAdmissionStopCh chan struct{}
 
 	// informers
-	KcpSharedInformerFactory              kcpexternalversions.SharedInformerFactory
-	KubeSharedInformerFactory             coreexternalversions.SharedInformerFactory
+	KcpSharedInformerFactory              kcpinformers.SharedInformerFactory
+	KubeSharedInformerFactory             kubernetesinformers.SharedInformerFactory
 	ApiExtensionsSharedInformerFactory    apiextensionsexternalversions.SharedInformerFactory
 	DynamicDiscoverySharedInformerFactory *informer.DynamicDiscoverySharedInformerFactory
 
@@ -108,7 +112,7 @@ type ExtraConfig struct {
 	//                   eventually it will be replaced by replication
 	//
 	// TemporaryRootShardKcpSharedInformerFactory bring data from the root shard
-	TemporaryRootShardKcpSharedInformerFactory kcpexternalversions.SharedInformerFactory
+	TemporaryRootShardKcpSharedInformerFactory kcpinformers.SharedInformerFactory
 }
 
 type completedConfig struct {
@@ -171,15 +175,15 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 	c.GenericConfig.RequestInfoResolver = requestinfo.NewFactory() // must be set here early to avoid a crash in the EnableMultiCluster roundtrip wrapper
 
 	// Setup kube * informers
-	c.KubeClusterClient, err = kubernetes.NewClusterForConfig(c.GenericConfig.LoopbackClientConfig)
+	c.KubeClusterClient, err = kubernetesclient.NewClusterForConfig(c.GenericConfig.LoopbackClientConfig)
 	if err != nil {
 		return nil, err
 	}
-	c.KubeSharedInformerFactory = coreexternalversions.NewSharedInformerFactoryWithOptions(
+	c.KubeSharedInformerFactory = kubernetesinformers.NewSharedInformerFactoryWithOptions(
 		c.KubeClusterClient.Cluster(logicalcluster.Wildcard),
 		resyncPeriod,
-		coreexternalversions.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
-		coreexternalversions.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
+		kubernetesinformers.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
+		kubernetesinformers.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
 	)
 
 	// Setup kcp * informers, but those will need the identities for the APIExports used to make the APIs available.
@@ -192,48 +196,46 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to load the kubeconfig from: %s, for the root shard, err: %w", c.Options.Extra.RootShardKubeconfigFile, err)
 		}
-		nonIdentityRootKcpShardClient, err := kcpclient.NewClusterForConfig(nonIdentityRootKcpShardSystemAdminConfig) // can only used for wildcard requests of apis.kcp.dev
-		if err != nil {
-			return nil, err
-		}
+
 		var kcpShardIdentityRoundTripper func(rt http.RoundTripper) http.RoundTripper
-		kcpShardIdentityRoundTripper, c.resolveIdentities = boostrap.NewWildcardIdentitiesWrappingRoundTripper(boostrap.KcpRootGroupExportNames, boostrap.KcpRootGroupResourceExportNames, nonIdentityRootKcpShardClient, c.KubeClusterClient)
+		kcpShardIdentityRoundTripper, c.resolveIdentities = boostrap.NewWildcardIdentitiesWrappingRoundTripper(boostrap.KcpRootGroupExportNames, boostrap.KcpRootGroupResourceExportNames, nonIdentityRootKcpShardSystemAdminConfig, c.KubeClusterClient)
 		rootKcpShardIdentityConfig := rest.CopyConfig(nonIdentityRootKcpShardSystemAdminConfig)
 		rootKcpShardIdentityConfig.Wrap(kcpShardIdentityRoundTripper)
 		c.RootShardKcpClusterClient, err = kcpclient.NewClusterForConfig(rootKcpShardIdentityConfig)
 		if err != nil {
 			return nil, err
 		}
-		c.TemporaryRootShardKcpSharedInformerFactory = kcpexternalversions.NewSharedInformerFactoryWithOptions(
+		c.TemporaryRootShardKcpSharedInformerFactory = kcpinformers.NewSharedInformerFactoryWithOptions(
 			c.RootShardKcpClusterClient.Cluster(logicalcluster.Wildcard),
 			resyncPeriod,
-			kcpexternalversions.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
-			kcpexternalversions.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
+			kcpinformers.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
+			kcpinformers.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
 		)
 
 		c.identityConfig = rest.CopyConfig(c.GenericConfig.LoopbackClientConfig)
 		c.identityConfig.Wrap(kcpShardIdentityRoundTripper)
 	} else {
 		// create an empty non-functional factory so that code that uses it but doesn't need it, doesn't have to check against the nil value
-		c.TemporaryRootShardKcpSharedInformerFactory = kcpexternalversions.NewSharedInformerFactory(nil, resyncPeriod)
+		c.TemporaryRootShardKcpSharedInformerFactory = kcpinformers.NewSharedInformerFactory(nil, resyncPeriod)
 
 		// The informers here are not used before the informers are actually started (i.e. no race).
-		nonIdentityKcpClusterClient, err := kcpclient.NewClusterForConfig(c.GenericConfig.LoopbackClientConfig) // can only used for wildcard requests of apis.kcp.dev
-		if err != nil {
-			return nil, err
-		}
-		c.identityConfig, c.resolveIdentities = boostrap.NewConfigWithWildcardIdentities(c.GenericConfig.LoopbackClientConfig, boostrap.KcpRootGroupExportNames, boostrap.KcpRootGroupResourceExportNames, nonIdentityKcpClusterClient, nil)
+
+		c.identityConfig, c.resolveIdentities = boostrap.NewConfigWithWildcardIdentities(c.GenericConfig.LoopbackClientConfig, boostrap.KcpRootGroupExportNames, boostrap.KcpRootGroupResourceExportNames, nil)
 	}
 	c.KcpClusterClient, err = kcpclient.NewClusterForConfig(c.identityConfig) // this is now generic to be used for all kcp API groups
 	if err != nil {
 		return nil, err
 	}
-	c.KcpSharedInformerFactory = kcpexternalversions.NewSharedInformerFactoryWithOptions(
+	c.KcpSharedInformerFactory = kcpinformers.NewSharedInformerFactoryWithOptions(
 		c.KcpClusterClient.Cluster(logicalcluster.Wildcard),
 		resyncPeriod,
-		kcpexternalversions.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
-		kcpexternalversions.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
+		kcpinformers.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
+		kcpinformers.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
 	)
+	c.DeepSARClient, err = kubernetesclient.NewClusterForConfig(authorization.WithDeepSARConfig(rest.CopyConfig(c.GenericConfig.LoopbackClientConfig)))
+	if err != nil {
+		return nil, err
+	}
 
 	// Setup apiextensions * informers
 	c.ApiExtensionsClusterClient, err = apiextensionsclient.NewClusterForConfig(c.GenericConfig.LoopbackClientConfig)
@@ -284,6 +286,7 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 	c.GenericConfig.BuildHandlerChainFunc = func(apiHandler http.Handler, genericConfig *genericapiserver.Config) (secure http.Handler) {
 		apiHandler = WithWildcardListWatchGuard(apiHandler)
 		apiHandler = WithWildcardIdentity(apiHandler)
+		apiHandler = authorization.WithDeepSubjectAccessReview(apiHandler)
 
 		apiHandler = genericapiserver.DefaultBuildHandlerChainFromAuthz(apiHandler, genericConfig)
 
@@ -315,6 +318,9 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		*c.preHandlerChainMux = append(*c.preHandlerChainMux, mux)
 		apiHandler = mux
 
+		if kcpfeatures.DefaultFeatureGate.Enabled(kcpfeatures.SyncerTunnel) {
+			apiHandler = tunneler.WithSyncerTunnel(apiHandler)
+		}
 		apiHandler = WithWorkspaceProjection(apiHandler, shardVirtualWorkspaceURL)
 		apiHandler = WithClusterAnnotation(apiHandler)
 		apiHandler = WithAuditAnnotation(apiHandler) // Must run before any audit annotation is made
@@ -337,6 +343,7 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		kcpadmissioninitializers.NewKcpInformersInitializer(c.KcpSharedInformerFactory),
 		kcpadmissioninitializers.NewKubeClusterClientInitializer(c.KubeClusterClient),
 		kcpadmissioninitializers.NewKcpClusterClientInitializer(c.KcpClusterClient),
+		kcpadmissioninitializers.NewDeepSARClientInitializer(c.DeepSARClient),
 		kcpadmissioninitializers.NewShardBaseURLInitializer(opts.Extra.ShardBaseURL),
 		kcpadmissioninitializers.NewShardExternalURLInitializer(opts.Extra.ShardExternalURL),
 		// The external address is provided as a function, as its value may be updated

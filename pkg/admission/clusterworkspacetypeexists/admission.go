@@ -33,7 +33,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/client-go/kubernetes"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clusters"
 
 	kcpinitializers "github.com/kcp-dev/kcp/pkg/admission/initializers"
@@ -41,7 +41,7 @@ import (
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/authorization/delegated"
 	kcpinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
-	tenancyv1alpha1lister "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
+	tenancylisters "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
 )
 
 const (
@@ -70,20 +70,22 @@ func Register(plugins *admission.Plugins) {
 //   transitions to the Initializing state.
 type clusterWorkspaceTypeExists struct {
 	*admission.Handler
-	typeLister             tenancyv1alpha1lister.ClusterWorkspaceTypeLister
-	workspaceLister        tenancyv1alpha1lister.ClusterWorkspaceLister
-	kubeClusterClient      kubernetes.ClusterInterface
+	typeLister             tenancylisters.ClusterWorkspaceTypeLister
+	workspaceLister        tenancylisters.ClusterWorkspaceLister
+	deepSARClient          kubernetesclient.ClusterInterface
 	transitiveTypeResolver transitiveTypeResolver
 
 	createAuthorizer delegated.DelegatedAuthorizerFactory
 }
 
 // Ensure that the required admission interfaces are implemented.
-var _ = admission.MutationInterface(&clusterWorkspaceTypeExists{})
-var _ = admission.ValidationInterface(&clusterWorkspaceTypeExists{})
-var _ = admission.InitializationValidator(&clusterWorkspaceTypeExists{})
-var _ = kcpinitializers.WantsKcpInformers(&clusterWorkspaceTypeExists{})
-var _ = kcpinitializers.WantsKubeClusterClient(&clusterWorkspaceTypeExists{})
+var (
+	_ = admission.MutationInterface(&clusterWorkspaceTypeExists{})
+	_ = admission.ValidationInterface(&clusterWorkspaceTypeExists{})
+	_ = admission.InitializationValidator(&clusterWorkspaceTypeExists{})
+	_ = kcpinitializers.WantsKcpInformers(&clusterWorkspaceTypeExists{})
+	_ = kcpinitializers.WantsDeepSARClient(&clusterWorkspaceTypeExists{})
+)
 
 // Admit adds type initializer on transition to initializing phase.
 func (o *clusterWorkspaceTypeExists) Admit(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) (err error) {
@@ -324,7 +326,7 @@ func (o *clusterWorkspaceTypeExists) Validate(ctx context.Context, a admission.A
 		}
 
 		for _, alias := range cwtAliases {
-			authz, err := o.createAuthorizer(logicalcluster.From(alias), o.kubeClusterClient)
+			authz, err := o.createAuthorizer(logicalcluster.From(alias), o.deepSARClient)
 			if err != nil {
 				return admission.NewForbidden(a, fmt.Errorf("unable to determine access to cluster workspace type %q", cw.Spec.Type))
 			}
@@ -390,8 +392,8 @@ func (o *clusterWorkspaceTypeExists) SetKcpInformers(informers kcpinformers.Shar
 	o.workspaceLister = informers.Tenancy().V1alpha1().ClusterWorkspaces().Lister()
 }
 
-func (o *clusterWorkspaceTypeExists) SetKubeClusterClient(kubeClusterClient kubernetes.ClusterInterface) {
-	o.kubeClusterClient = kubeClusterClient
+func (o *clusterWorkspaceTypeExists) SetDeepSARClient(client kubernetesclient.ClusterInterface) {
+	o.deepSARClient = client
 }
 
 // updateUnstructured updates the given unstructured object to match the given cluster workspace.

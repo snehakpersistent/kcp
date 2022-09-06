@@ -37,14 +37,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/dynamic"
-	kubernetesclientset "k8s.io/client-go/kubernetes"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
 
 	apiresourcev1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apiresource/v1alpha1"
-	conditionsapi "github.com/kcp-dev/kcp/pkg/apis/third_party/conditions/apis/conditions/v1alpha1"
+	conditionsv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/third_party/conditions/apis/conditions/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/apis/third_party/conditions/util/conditions"
 	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	workloadcliplugin "github.com/kcp-dev/kcp/pkg/cliplugins/workload/plugin"
@@ -124,12 +125,13 @@ func (sf *syncerFixture) Start(t *testing.T) *StartedSyncerFixture {
 		"workload",
 		"sync",
 		sf.syncTargetName,
-		"--syncer-image", syncerImage,
-		"--output-file", "-",
-		"--qps", "-1",
+		"--syncer-image=" + syncerImage,
+		"--output-file=-",
+		"--qps=-1",
+		"--feature-gates=" + fmt.Sprintf("%s", utilfeature.DefaultFeatureGate),
 	}
 	for _, resource := range sf.extraResourcesToSync {
-		pluginArgs = append(pluginArgs, "--resources", resource)
+		pluginArgs = append(pluginArgs, "--resources="+resource)
 	}
 	syncerYAML := RunKcpCliPlugin(t, kubeconfigPath, pluginArgs)
 
@@ -166,7 +168,7 @@ func (sf *syncerFixture) Start(t *testing.T) *StartedSyncerFixture {
 	// Apply the yaml output from the plugin to the downstream server
 	KubectlApply(t, downstreamKubeconfigPath, syncerYAML)
 
-	artifactDir, err := CreateTempDirForTest(t, "artifacts")
+	artifactDir, _, err := ScratchDirs(t)
 	if err != nil {
 		t.Errorf("failed to create temp dir for syncer artifacts: %v", err)
 	}
@@ -233,7 +235,7 @@ func (sf *syncerFixture) Start(t *testing.T) *StartedSyncerFixture {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	t.Cleanup(cancelFunc)
 
-	downstreamKubeClient, err := kubernetesclientset.NewForConfig(downstreamConfig)
+	downstreamKubeClient, err := kubernetesclient.NewForConfig(downstreamConfig)
 	require.NoError(t, err)
 
 	if useDeployedSyncer {
@@ -314,6 +316,7 @@ func (sf *syncerFixture) Start(t *testing.T) *StartedSyncerFixture {
 
 	startedSyncer := &StartedSyncerFixture{
 		SyncerConfig:         syncerConfig,
+		SyncerID:             syncerID,
 		DownstreamConfig:     downstreamConfig,
 		DownstreamKubeClient: downstreamKubeClient,
 	}
@@ -329,11 +332,11 @@ func (sf *syncerFixture) Start(t *testing.T) *StartedSyncerFixture {
 // downstream cluster.
 type StartedSyncerFixture struct {
 	SyncerConfig *syncer.SyncerConfig
-
+	SyncerID     string
 	// Provide cluster-admin config and client for test purposes. The downstream config in
 	// SyncerConfig will be less privileged.
 	DownstreamConfig     *rest.Config
-	DownstreamKubeClient kubernetesclientset.Interface
+	DownstreamKubeClient kubernetesclient.Interface
 }
 
 // WaitForClusterReady waits for the cluster to be ready with the given reason.
@@ -344,8 +347,8 @@ func (sf *StartedSyncerFixture) WaitForClusterReady(t *testing.T, ctx context.Co
 	require.NoError(t, err)
 	EventuallyReady(t, func() (conditions.Getter, error) {
 		return kcpClusterClient.WorkloadV1alpha1().SyncTargets().Get(logicalcluster.WithCluster(ctx, cfg.SyncTargetWorkspace), cfg.SyncTargetName, metav1.GetOptions{})
-	}, "Waiting for cluster %q condition %q", cfg.SyncTargetName, conditionsapi.ReadyCondition)
-	t.Logf("Cluster %q is %s", cfg.SyncTargetName, conditionsapi.ReadyCondition)
+	}, "Waiting for cluster %q condition %q", cfg.SyncTargetName, conditionsv1alpha1.ReadyCondition)
+	t.Logf("Cluster %q is %s", cfg.SyncTargetName, conditionsv1alpha1.ReadyCondition)
 }
 
 // syncerConfigFromCluster reads the configuration needed to start an in-process
@@ -354,7 +357,7 @@ func syncerConfigFromCluster(t *testing.T, downstreamConfig *rest.Config, namesp
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	t.Cleanup(cancelFunc)
 
-	downstreamKubeClient, err := kubernetesclientset.NewForConfig(downstreamConfig)
+	downstreamKubeClient, err := kubernetesclient.NewForConfig(downstreamConfig)
 	require.NoError(t, err)
 
 	// Read the upstream kubeconfig from the syncer secret
@@ -424,7 +427,7 @@ func syncerConfigFromCluster(t *testing.T, downstreamConfig *rest.Config, namesp
 func syncerArgsToMap(args []string) (map[string][]string, error) {
 	argMap := map[string][]string{}
 	for _, arg := range args {
-		argParts := strings.Split(arg, "=")
+		argParts := strings.SplitN(arg, "=", 2)
 		if len(argParts) != 2 {
 			return nil, fmt.Errorf("arg %q isn't of the expected form `<key>=<value>`", arg)
 		}

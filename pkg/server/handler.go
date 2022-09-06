@@ -129,17 +129,15 @@ func WithClusterScope(apiHandler http.Handler) http.HandlerFunc {
 			}
 			clusterName, path = logicalcluster.New(path[:i]), path[i:]
 			req.URL.Path = path
-			for i := 0; i < 2 && len(req.URL.RawPath) > 1; i++ {
-				slash := strings.Index(req.URL.RawPath[1:], "/")
-				if slash == -1 {
-					responsewriters.ErrorNegotiated(
-						apierrors.NewInternalError(fmt.Errorf("unable to parse cluster when shortening raw path, have clusterName=%q, rawPath=%q", clusterName, req.URL.RawPath)),
-						errorCodecs, schema.GroupVersion{},
-						w, req)
-					return
-				}
-				req.URL.RawPath = req.URL.RawPath[slash:]
+			newURL, err := url.Parse(req.URL.String())
+			if err != nil {
+				responsewriters.ErrorNegotiated(
+					apierrors.NewInternalError(fmt.Errorf("unable to resolve %s, err %w", req.URL.Path, err)),
+					errorCodecs, schema.GroupVersion{},
+					w, req)
+				return
 			}
+			req.URL = newURL
 		} else {
 			clusterName = logicalcluster.New(req.Header.Get(logicalcluster.ClusterHeader))
 		}
@@ -206,6 +204,7 @@ func WithWorkspaceProjection(apiHandler http.Handler, shardVirtualWorkspaceURL *
 	getHomeWorkspaceRequestPath := path.Join(toRedirectPath, "~")
 
 	return func(w http.ResponseWriter, req *http.Request) {
+		logger := klog.FromContext(req.Context())
 		cluster := request.ClusterFrom(req.Context())
 		if cluster.Name.Empty() {
 			apiHandler.ServeHTTP(w, req)
@@ -223,14 +222,15 @@ func WithWorkspaceProjection(apiHandler http.Handler, shardVirtualWorkspaceURL *
 
 		if strings.HasPrefix(req.URL.Path, toRedirectPath) {
 			newPath := path.Join("/services/workspaces", cluster.Name.String(), req.URL.Path)
-			klog.V(4).Infof("Rewriting %s -> %s", path.Join(cluster.Name.Path(), req.URL.Path), newPath)
+			logger = logger.WithValues("from", path.Join(cluster.Name.Path(), req.URL.Path), "to", newPath)
+			logger.V(4).Info("rewriting path")
 			req.URL.Path = newPath
 			if shardVirtualWorkspaceURL != nil {
 				u := *req.URL // shallow copy
 				u.RawQuery = req.URL.RawQuery
 				u.Host = shardVirtualWorkspaceURL.Host
 
-				klog.V(4).Infof("Redirecting virtual workspace request to %s", u.String())
+				logger.V(4).WithValues("redirect", u.String()).Info("redirecting virtual workspace request")
 				http.Redirect(w, req, u.String(), http.StatusTemporaryRedirect)
 				return
 			}
@@ -353,7 +353,7 @@ func WithWildcardIdentity(handler http.Handler) http.Handler {
 
 		updatedReq, err := processResourceIdentity(req, requestInfo)
 		if err != nil {
-			klog.Errorf("WithWildcardIdentity: unable to determine resource from path %s", req.URL.Path)
+			klog.FromContext(req.Context()).WithValues("operation", "WithWildcardIdentity", "path", req.URL.Path).Error(err, "unable to determine resource")
 
 			responsewriters.ErrorNegotiated(
 				apierrors.NewInternalError(err),

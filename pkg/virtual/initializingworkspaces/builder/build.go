@@ -34,7 +34,7 @@ import (
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clusters"
@@ -47,7 +47,7 @@ import (
 	"github.com/kcp-dev/kcp/pkg/apis/tenancy/initialization"
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/authorization/delegated"
-	kcpinformer "github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
+	kcpinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
 	"github.com/kcp-dev/kcp/pkg/server/requestinfo"
 	"github.com/kcp-dev/kcp/pkg/virtual/framework"
 	virtualworkspacesdynamic "github.com/kcp-dev/kcp/pkg/virtual/framework/dynamic"
@@ -63,21 +63,11 @@ func BuildVirtualWorkspace(
 	cfg *rest.Config,
 	rootPathPrefix string,
 	dynamicClusterClient dynamic.ClusterInterface,
-	kubeClusterClient kubernetes.ClusterInterface,
-	wildcardKcpInformers kcpinformer.SharedInformerFactory,
+	kubeClusterClient kubernetesclient.ClusterInterface,
+	wildcardKcpInformers kcpinformers.SharedInformerFactory,
 ) ([]rootapiserver.NamedVirtualWorkspace, error) {
 	if !strings.HasSuffix(rootPathPrefix, "/") {
 		rootPathPrefix += "/"
-	}
-
-	resolver := requestinfo.NewFactory()
-	isClusterWorkspaceRequest := func(path string) bool {
-		info, err := resolver.NewRequestInfo(&http.Request{URL: &url.URL{Path: path}})
-		if err != nil {
-			klog.V(2).Infof("failed to determine info for request: %v", err)
-			return false
-		}
-		return info.IsResourceRequest && info.APIGroup == tenancyv1alpha1.SchemeGroupVersion.Group && info.Resource == "clusterworkspaces"
 	}
 
 	clusterWorkspaceResource := apisv1alpha1.APIResourceSchema{}
@@ -123,7 +113,7 @@ func BuildVirtualWorkspace(
 				dynamicClusterClient: dynamicClusterClient,
 				exposeSubresources:   false,
 				resource:             &clusterWorkspaceResource,
-				storageProvider:      provideFilteringRestStorage,
+				storageProvider:      provideFilteredReadOnlyRestStorage,
 			}, nil
 		},
 	}
@@ -303,7 +293,22 @@ func BuildVirtualWorkspace(
 	}, nil
 }
 
-func digestUrl(urlPath, rootPathPrefix string) (genericapirequest.Cluster, dynamiccontext.APIDomainKey, string, bool) {
+var resolver = requestinfo.NewFactory()
+
+func isClusterWorkspaceRequest(path string) bool {
+	info, err := resolver.NewRequestInfo(&http.Request{URL: &url.URL{Path: path}})
+	if err != nil {
+		return false
+	}
+	return info.IsResourceRequest && info.APIGroup == tenancyv1alpha1.SchemeGroupVersion.Group && info.Resource == "clusterworkspaces"
+}
+
+func digestUrl(urlPath, rootPathPrefix string) (
+	cluster genericapirequest.Cluster,
+	key dynamiccontext.APIDomainKey,
+	logicalPath string,
+	accepted bool,
+) {
 	if !strings.HasPrefix(urlPath, rootPathPrefix) {
 		return genericapirequest.Cluster{}, dynamiccontext.APIDomainKey(""), "", false
 	}
@@ -381,7 +386,7 @@ func (a *apiSetRetriever) GetAPIDefinitionSet(ctx context.Context, key dynamicco
 
 var _ apidefinition.APIDefinitionSetGetter = &apiSetRetriever{}
 
-func newAuthorizer(client kubernetes.ClusterInterface) authorizer.AuthorizerFunc {
+func newAuthorizer(client kubernetesclient.ClusterInterface) authorizer.AuthorizerFunc {
 	return func(ctx context.Context, attr authorizer.Attributes) (authorizer.Decision, string, error) {
 		workspace, name, err := initialization.TypeFrom(tenancyv1alpha1.ClusterWorkspaceInitializer(dynamiccontext.APIDomainKeyFrom(ctx)))
 		if err != nil {

@@ -31,10 +31,12 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/client-go/kubernetes"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
+	kcpinitializers "github.com/kcp-dev/kcp/pkg/admission/initializers"
 	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1/permissionclaims"
 	"github.com/kcp-dev/kcp/pkg/authorization/delegated"
 )
 
@@ -54,15 +56,18 @@ func Register(plugins *admission.Plugins) {
 
 type apiBindingAdmission struct {
 	*admission.Handler
-	kubeClusterClient kubernetes.ClusterInterface
+	deepSARClient kubernetesclient.ClusterInterface
 
 	createAuthorizer delegated.DelegatedAuthorizerFactory
 }
 
 // Ensure that the required admission interfaces are implemented.
-var _ = admission.ValidationInterface(&apiBindingAdmission{})
-var _ = admission.MutationInterface(&apiBindingAdmission{})
-var _ = admission.InitializationValidator(&apiBindingAdmission{})
+var (
+	_ = admission.ValidationInterface(&apiBindingAdmission{})
+	_ = admission.MutationInterface(&apiBindingAdmission{})
+	_ = admission.InitializationValidator(&apiBindingAdmission{})
+	_ = kcpinitializers.WantsDeepSARClient(&apiBindingAdmission{})
+)
 
 func (o *apiBindingAdmission) Admit(ctx context.Context, a admission.Attributes, _ admission.ObjectInterfaces) error {
 	if a.GetResource().GroupResource() != apisv1alpha1.Resource("apibindings") {
@@ -90,6 +95,19 @@ func (o *apiBindingAdmission) Admit(ctx context.Context, a admission.Attributes,
 	}
 	if apiBinding.Spec.Reference.Workspace.Path == "" {
 		apiBinding.Spec.Reference.Workspace.Path = cluster.Name.String()
+	}
+
+	// set labels
+	if apiBinding.Spec.Reference.Workspace == nil {
+		delete(apiBinding.Labels, apisv1alpha1.InternalAPIBindingExportLabelKey)
+	} else {
+		if apiBinding.Labels == nil {
+			apiBinding.Labels = make(map[string]string)
+		}
+		apiBinding.Labels[apisv1alpha1.InternalAPIBindingExportLabelKey] = permissionclaims.ToAPIBindingExportLabelValue(
+			logicalcluster.New(apiBinding.Spec.Reference.Workspace.Path),
+			apiBinding.Spec.Reference.Workspace.ExportName,
+		)
 	}
 
 	// write back
@@ -166,6 +184,17 @@ func (o *apiBindingAdmission) Validate(ctx context.Context, a admission.Attribut
 		return admission.NewForbidden(a, fmt.Errorf("workspace reference is missing")) // this should not happen due to validation
 	}
 
+	// Verify the labels
+	value, found := apiBinding.Labels[apisv1alpha1.InternalAPIBindingExportLabelKey]
+	if apiBinding.Spec.Reference.Workspace == nil && found {
+		return admission.NewForbidden(a, field.Invalid(field.NewPath("metadata").Child("labels").Key(apisv1alpha1.InternalAPIBindingExportLabelKey), value, "must not be set"))
+	} else if expected := permissionclaims.ToAPIBindingExportLabelValue(
+		logicalcluster.New(apiBinding.Spec.Reference.Workspace.Path),
+		apiBinding.Spec.Reference.Workspace.ExportName,
+	); value != expected {
+		return admission.NewForbidden(a, field.Invalid(field.NewPath("metadata").Child("labels").Key(apisv1alpha1.InternalAPIBindingExportLabelKey), value, fmt.Sprintf("must be set to %q", expected)))
+	}
+
 	// Access check
 	if err := o.checkAPIExportAccess(ctx, a.GetUserInfo(), apiExportClusterName, apiBinding.Spec.Reference.Workspace.ExportName); err != nil {
 		action := "create"
@@ -179,10 +208,11 @@ func (o *apiBindingAdmission) Validate(ctx context.Context, a admission.Attribut
 }
 
 func (o *apiBindingAdmission) checkAPIExportAccess(ctx context.Context, user user.Info, apiExportClusterName logicalcluster.Name, apiExportName string) error {
-	authz, err := o.createAuthorizer(apiExportClusterName, o.kubeClusterClient)
+	logger := klog.FromContext(ctx)
+	authz, err := o.createAuthorizer(apiExportClusterName, o.deepSARClient)
 	if err != nil {
 		// Logging a more specific error for the operator
-		klog.Errorf("error creating authorizer from delegating authorizer config: %v", err)
+		logger.Error(err, "error creating authorizer from delegating authorizer config")
 		// Returning a less specific error to the end user
 		return errors.New("unable to authorize request")
 	}
@@ -208,15 +238,15 @@ func (o *apiBindingAdmission) checkAPIExportAccess(ctx context.Context, user use
 
 // ValidateInitialization ensures the required injected fields are set.
 func (o *apiBindingAdmission) ValidateInitialization() error {
-	if o.kubeClusterClient == nil {
+	if o.deepSARClient == nil {
 		return fmt.Errorf(PluginName + " plugin needs a Kubernetes ClusterInterface")
 	}
 
 	return nil
 }
 
-// SetKubeClusterClient is an admission plugin initializer function that injects a Kubernetes cluster client into
+// SetDeepSARClient is an admission plugin initializer function that injects a client capable of deep SAR requests into
 // this admission plugin.
-func (o *apiBindingAdmission) SetKubeClusterClient(clusterClient kubernetes.ClusterInterface) {
-	o.kubeClusterClient = clusterClient
+func (o *apiBindingAdmission) SetDeepSARClient(client kubernetesclient.ClusterInterface) {
+	o.deepSARClient = client
 }

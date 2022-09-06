@@ -40,6 +40,8 @@ import (
 
 	workloadv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
 	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
+	kcpfeatures "github.com/kcp-dev/kcp/pkg/features"
+	"github.com/kcp-dev/kcp/pkg/syncer/namespace"
 	"github.com/kcp-dev/kcp/pkg/syncer/spec"
 	"github.com/kcp-dev/kcp/pkg/syncer/status"
 	"github.com/kcp-dev/kcp/third_party/keyfunctions"
@@ -210,6 +212,11 @@ func StartSyncer(ctx context.Context, cfg *SyncerConfig, numSyncerThreads int, i
 		return err
 	}
 
+	namespaceSyncer, err := namespace.NewNamespaceController(cfg.SyncTargetWorkspace, cfg.SyncTargetName, syncTargetKey, syncTarget.GetUID(), upstreamDynamicClusterClient, downstreamDynamicClient, upstreamInformers, downstreamInformers)
+	if err != nil {
+		return err
+	}
+
 	upstreamInformers.Start(ctx.Done())
 	downstreamInformers.Start(ctx.Done())
 
@@ -218,6 +225,11 @@ func StartSyncer(ctx context.Context, cfg *SyncerConfig, numSyncerThreads int, i
 
 	go specSyncer.Start(ctx, numSyncerThreads)
 	go statusSyncer.Start(ctx, numSyncerThreads)
+	go namespaceSyncer.Start(ctx, numSyncerThreads)
+
+	if kcpfeatures.DefaultFeatureGate.Enabled(kcpfeatures.SyncerTunnel) {
+		go startSyncerTunnel(ctx, upstreamConfig, downstreamConfig, cfg.SyncTargetWorkspace, cfg.SyncTargetName)
+	}
 
 	// Attempt to heartbeat every interval
 	go wait.UntilWithContext(ctx, func(ctx context.Context) {

@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/clusters"
 	"k8s.io/klog/v2"
 
+	"github.com/kcp-dev/kcp/pkg/apis/apis"
 	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1/permissionclaims"
 	apisinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/apis/v1alpha1"
@@ -36,23 +37,20 @@ import (
 // Labeler calculates labels to apply to all instances of a cluster-group-resource based on permission claims.
 type Labeler struct {
 	listAPIBindingsAcceptingClaimedGroupResource func(clusterName logicalcluster.Name, groupResource schema.GroupResource) ([]*apisv1alpha1.APIBinding, error)
-	getAPIExport                                 func(clusterName logicalcluster.Name, name string) (*apisv1alpha1.APIExport, error)
+	getAPIBinding                                func(clusterName logicalcluster.Name, name string) (*apisv1alpha1.APIBinding, error)
 }
 
 // NewLabeler returns a new Labeler.
-func NewLabeler(
-	apiBindingInformer apisinformers.APIBindingInformer,
-	apiExportInformer apisinformers.APIExportInformer,
-) *Labeler {
+func NewLabeler(apiBindingInformer apisinformers.APIBindingInformer) *Labeler {
 	return &Labeler{
 		listAPIBindingsAcceptingClaimedGroupResource: func(clusterName logicalcluster.Name, groupResource schema.GroupResource) ([]*apisv1alpha1.APIBinding, error) {
 			indexKey := indexers.ClusterAndGroupResourceValue(clusterName, groupResource)
 			return indexers.ByIndex[*apisv1alpha1.APIBinding](apiBindingInformer.Informer().GetIndexer(), indexers.APIBindingByClusterAndAcceptedClaimedGroupResources, indexKey)
 		},
 
-		getAPIExport: func(clusterName logicalcluster.Name, name string) (*apisv1alpha1.APIExport, error) {
+		getAPIBinding: func(clusterName logicalcluster.Name, name string) (*apisv1alpha1.APIBinding, error) {
 			key := clusters.ToClusterAwareKey(clusterName, name)
-			return apiExportInformer.Lister().Get(key)
+			return apiBindingInformer.Lister().Get(key)
 		},
 	}
 }
@@ -60,7 +58,7 @@ func NewLabeler(
 // LabelsFor returns all the applicable labels for the cluster-group-resource relating to permission claims. This is
 // the intersection of (1) all APIBindings in the cluster that have accepted claims for the group-resource with (2)
 // associated APIExports that are claiming group-resource.
-func (l *Labeler) LabelsFor(ctx context.Context, cluster logicalcluster.Name, groupResource schema.GroupResource) (map[string]string, error) {
+func (l *Labeler) LabelsFor(ctx context.Context, cluster logicalcluster.Name, groupResource schema.GroupResource, resourceName string) (map[string]string, error) {
 	labels := map[string]string{}
 
 	bindings, err := l.listAPIBindingsAcceptingClaimedGroupResource(cluster, groupResource)
@@ -79,20 +77,13 @@ func (l *Labeler) LabelsFor(ctx context.Context, cluster logicalcluster.Name, gr
 		}
 
 		boundAPIExportWorkspace := binding.Status.BoundAPIExport.Workspace
-		export, err := l.getAPIExport(logicalcluster.New(boundAPIExportWorkspace.Path), boundAPIExportWorkspace.ExportName)
-		if err != nil {
-			logger.Error(err, "error getting APIExport", "exportCluster", boundAPIExportWorkspace.Path, "exportName", boundAPIExportWorkspace.ExportName)
-			continue
-		}
 
-		logger = logging.WithObject(logger, export)
-
-		for _, claim := range export.Spec.PermissionClaims {
+		for _, claim := range binding.Status.ExportPermissionClaims {
 			if claim.Group != groupResource.Group || claim.Resource != groupResource.Resource {
 				continue
 			}
 
-			k, v, err := permissionclaims.ToLabelKeyAndValue(logicalcluster.From(export), export.Name, claim)
+			k, v, err := permissionclaims.ToLabelKeyAndValue(logicalcluster.New(boundAPIExportWorkspace.Path), boundAPIExportWorkspace.ExportName, claim)
 			if err != nil {
 				// extremely unlikely to get an error here - it means the json marshaling failed
 				logger.Error(err, "error calculating permission claim label key and value",
@@ -100,6 +91,24 @@ func (l *Labeler) LabelsFor(ctx context.Context, cluster logicalcluster.Name, gr
 				continue
 			}
 			labels[k] = v
+		}
+	}
+
+	// for APIBindings we have to set the constant label value on itself to make the APIBinding
+	// pointing to an APIExport visible to the owner of the export, independently of the permission claim
+	// acceptance of the binding.
+	if groupResource.Group == apis.GroupName && groupResource.Resource == "apibindings" {
+		binding, err := l.getAPIBinding(cluster, resourceName)
+		if err != nil {
+			logger.Error(err, "error getting APIBinding", "bindingName", resourceName)
+			return labels, nil // can only be a NotFound
+		}
+
+		if exportRef := binding.Status.BoundAPIExport; exportRef != nil && exportRef.Workspace != nil {
+			k, v := permissionclaims.ToReflexiveAPIBindingLabelKeyAndValue(logicalcluster.New(exportRef.Workspace.Path), exportRef.Workspace.ExportName)
+			if _, found := labels[k]; !found {
+				labels[k] = v
+			}
 		}
 	}
 

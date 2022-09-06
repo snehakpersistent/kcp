@@ -20,9 +20,9 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/initializer"
 	quota "k8s.io/apiserver/pkg/quota/v1"
-	"k8s.io/client-go/kubernetes"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 
-	kcpclientset "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
+	kcpclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	kcpinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
 )
 
@@ -49,7 +49,7 @@ func (i *kcpInformersInitializer) Initialize(plugin admission.Interface) {
 // NewKubeClusterClientInitializer returns an admission plugin initializer that injects
 // a kube cluster client into admission plugins.
 func NewKubeClusterClientInitializer(
-	kubeClusterClient kubernetes.ClusterInterface,
+	kubeClusterClient kubernetesclient.ClusterInterface,
 ) *kubeClusterClientInitializer {
 	return &kubeClusterClientInitializer{
 		kubeClusterClient: kubeClusterClient,
@@ -57,7 +57,7 @@ func NewKubeClusterClientInitializer(
 }
 
 type kubeClusterClientInitializer struct {
-	kubeClusterClient kubernetes.ClusterInterface
+	kubeClusterClient kubernetesclient.ClusterInterface
 }
 
 func (i *kubeClusterClientInitializer) Initialize(plugin admission.Interface) {
@@ -69,7 +69,7 @@ func (i *kubeClusterClientInitializer) Initialize(plugin admission.Interface) {
 // NewKcpClusterClientInitializer returns an admission plugin initializer that injects
 // a kcp cluster client into admission plugins.
 func NewKcpClusterClientInitializer(
-	kcpClusterClient kcpclientset.ClusterInterface,
+	kcpClusterClient kcpclient.ClusterInterface,
 ) *kcpClusterClientInitializer {
 	return &kcpClusterClientInitializer{
 		kcpClusterClient: kcpClusterClient,
@@ -77,12 +77,32 @@ func NewKcpClusterClientInitializer(
 }
 
 type kcpClusterClientInitializer struct {
-	kcpClusterClient kcpclientset.ClusterInterface
+	kcpClusterClient kcpclient.ClusterInterface
 }
 
 func (i *kcpClusterClientInitializer) Initialize(plugin admission.Interface) {
 	if wants, ok := plugin.(WantsKcpClusterClient); ok {
 		wants.SetKcpClusterClient(i.kcpClusterClient)
+	}
+}
+
+// NewDeepSARClientInitializer returns an admission plugin initializer that injects
+// a deep SAR client into admission plugins.
+func NewDeepSARClientInitializer(
+	deepSARClient kubernetesclient.ClusterInterface,
+) *clientConfigInitializer {
+	return &clientConfigInitializer{
+		deepSARClient: deepSARClient,
+	}
+}
+
+type clientConfigInitializer struct {
+	deepSARClient kubernetesclient.ClusterInterface
+}
+
+func (i *clientConfigInitializer) Initialize(plugin admission.Interface) {
+	if wants, ok := plugin.(WantsDeepSARClient); ok {
+		wants.SetDeepSARClient(i.deepSARClient)
 	}
 }
 

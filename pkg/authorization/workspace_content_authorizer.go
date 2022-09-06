@@ -31,32 +31,29 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	clientgoinformers "k8s.io/client-go/informers"
-	rbacv1 "k8s.io/client-go/informers/rbac/v1"
-	rbacv1listers "k8s.io/client-go/listers/rbac/v1"
+	kubernetesinformers "k8s.io/client-go/informers"
+	rbacinformers "k8s.io/client-go/informers/rbac/v1"
+	rbaclisters "k8s.io/client-go/listers/rbac/v1"
 	"k8s.io/client-go/tools/clusters"
 	"k8s.io/kubernetes/pkg/genericcontrolplane"
 	"k8s.io/kubernetes/plugin/pkg/auth/authorizer/rbac"
 
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
+	tenancyv1beta1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1beta1"
 	"github.com/kcp-dev/kcp/pkg/authorization/bootstrap"
-	tenancyalphav1 "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
+	tenancylisters "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
 	rbacwrapper "github.com/kcp-dev/kcp/pkg/virtual/framework/wrappers/rbac"
 )
 
 const (
 	WorkspaceAcccessNotPermittedReason = "workspace access not permitted"
 
-	DecisionNoOpinion = "NoOpinion"
-	DecisionAllowed   = "Allowed"
-	DecisionDenied    = "Denied"
-
 	WorkspaceContentAuditPrefix   = "content.authorization.kcp.dev/"
 	WorkspaceContentAuditDecision = WorkspaceContentAuditPrefix + "decision"
 	WorkspaceContentAuditReason   = WorkspaceContentAuditPrefix + "reason"
 )
 
-func NewWorkspaceContentAuthorizer(versionedInformers clientgoinformers.SharedInformerFactory, clusterWorkspaceLister tenancyalphav1.ClusterWorkspaceLister, delegate authorizer.Authorizer) authorizer.Authorizer {
+func NewWorkspaceContentAuthorizer(versionedInformers kubernetesinformers.SharedInformerFactory, clusterWorkspaceLister tenancylisters.ClusterWorkspaceLister, delegate authorizer.Authorizer) authorizer.Authorizer {
 	return &workspaceContentAuthorizer{
 		rbacInformers: versionedInformers.Rbac().V1(),
 
@@ -71,14 +68,14 @@ func NewWorkspaceContentAuthorizer(versionedInformers clientgoinformers.SharedIn
 }
 
 type workspaceContentAuthorizer struct {
-	roleLister               rbacv1listers.RoleLister
-	roleBindingLister        rbacv1listers.RoleBindingLister
-	clusterRoleBindingLister rbacv1listers.ClusterRoleBindingLister
-	clusterRoleLister        rbacv1listers.ClusterRoleLister
-	clusterWorkspaceLister   tenancyalphav1.ClusterWorkspaceLister
+	roleLister               rbaclisters.RoleLister
+	roleBindingLister        rbaclisters.RoleBindingLister
+	clusterRoleBindingLister rbaclisters.ClusterRoleBindingLister
+	clusterRoleLister        rbaclisters.ClusterRoleLister
+	clusterWorkspaceLister   tenancylisters.ClusterWorkspaceLister
 
 	// TODO: this will go away when scoping lands. Then we only have those 4 listers above.
-	rbacInformers rbacv1.Interface
+	rbacInformers rbacinformers.Interface
 
 	// union of local and bootstrap authorizer
 	delegate authorizer.Authorizer
@@ -113,6 +110,26 @@ func (a *workspaceContentAuthorizer) Authorize(ctx context.Context, attr authori
 	isUser := len(subjectClusters) == 0
 	isServiceAccountFromRootCluster := subjectClusters[tenancyv1alpha1.RootCluster]
 	isServiceAccountFromCluster := subjectClusters[cluster.Name]
+
+	if IsDeepSubjectAccessReviewFrom(ctx, attr) {
+		attr := deepCopyAttributes(attr)
+		// this is a deep SAR request, we have to skip the checks here and delegate to the subsequent authorizer.
+		if isAuthenticated && !isUser && !isServiceAccountFromCluster {
+			// service accounts from other workspaces might conflict with local service accounts by name.
+			// This could lead to unwanted side effects of unwanted applied permissions.
+			// Hence, these requests have to be anonymized.
+			attr.User = &user.DefaultInfo{
+				Name:   "system:anonymous",
+				Groups: []string{"system:authenticated"},
+			}
+		}
+		kaudit.AddAuditAnnotations(
+			ctx,
+			WorkspaceContentAuditDecision, DecisionAllowed,
+			WorkspaceContentAuditReason, "deep SAR request",
+		)
+		return a.delegate.Authorize(ctx, attr)
+	}
 
 	// Every authenticated user has access to the root workspace but not every service account.
 	// For root, only service accounts declared in root have access.
@@ -214,8 +231,8 @@ func (a *workspaceContentAuthorizer) Authorize(ctx context.Context, attr authori
 			workspaceAttr := authorizer.AttributesRecord{
 				User:            attr.GetUser(),
 				Verb:            verb,
-				APIGroup:        tenancyv1alpha1.SchemeGroupVersion.Group,
-				APIVersion:      tenancyv1alpha1.SchemeGroupVersion.Version,
+				APIGroup:        tenancyv1beta1.SchemeGroupVersion.Group,
+				APIVersion:      tenancyv1beta1.SchemeGroupVersion.Version,
 				Resource:        "workspaces",
 				Subresource:     "content",
 				Name:            cluster.Name.Base(),

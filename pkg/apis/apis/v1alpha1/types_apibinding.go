@@ -22,6 +22,12 @@ import (
 	conditionsv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/third_party/conditions/apis/conditions/v1alpha1"
 )
 
+const (
+	// InternalAPIBindingExportLabelKey is the label key on an APIBinding with the
+	// base62(sha224(<clusterName>:<exportName>)) as value to filter bindings by export.
+	InternalAPIBindingExportLabelKey = "internal.apis.kcp.dev/export"
+)
+
 // APIBinding enables a set of resources and their behaviour through an external
 // service provider in this workspace.
 //
@@ -170,6 +176,11 @@ type APIBindingStatus struct {
 	//
 	// +optional
 	AppliedPermissionClaims []PermissionClaim `json:"appliedPermissionClaims,omitempty"`
+
+	// exportPermissionClaims records the permissions that the export provider is asking for
+	// the binding to grant.
+	// +optional
+	ExportPermissionClaims []PermissionClaim `json:"exportPermissionClaims,omitempty"`
 }
 
 // These are valid conditions of APIBinding.

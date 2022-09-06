@@ -18,29 +18,37 @@ package authorization
 
 import (
 	"context"
+	"fmt"
 
+	kaudit "k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	clientgoinformers "k8s.io/client-go/informers"
-	rbacv1listers "k8s.io/client-go/listers/rbac/v1"
+	kubernetesinformers "k8s.io/client-go/informers"
+	rbaclisters "k8s.io/client-go/listers/rbac/v1"
 	"k8s.io/kubernetes/pkg/genericcontrolplane"
 	"k8s.io/kubernetes/plugin/pkg/auth/authorizer/rbac"
 
 	rbacwrapper "github.com/kcp-dev/kcp/pkg/virtual/framework/wrappers/rbac"
 )
 
+const (
+	LocalAuditPrefix   = "local.authorization.kcp.dev/"
+	LocalAuditDecision = LocalAuditPrefix + "decision"
+	LocalAuditReason   = LocalAuditPrefix + "reason"
+)
+
 type LocalAuthorizer struct {
-	roleLister               rbacv1listers.RoleLister
-	roleBindingLister        rbacv1listers.RoleBindingLister
-	clusterRoleBindingLister rbacv1listers.ClusterRoleBindingLister
-	clusterRoleLister        rbacv1listers.ClusterRoleLister
+	roleLister               rbaclisters.RoleLister
+	roleBindingLister        rbaclisters.RoleBindingLister
+	clusterRoleBindingLister rbaclisters.ClusterRoleBindingLister
+	clusterRoleLister        rbaclisters.ClusterRoleLister
 
 	// TODO: this will go away when scoping lands. Then we only have those 4 listers above.
-	versionedInformers clientgoinformers.SharedInformerFactory
+	versionedInformers kubernetesinformers.SharedInformerFactory
 }
 
-func NewLocalAuthorizer(versionedInformers clientgoinformers.SharedInformerFactory) (authorizer.Authorizer, authorizer.RuleResolver) {
+func NewLocalAuthorizer(versionedInformers kubernetesinformers.SharedInformerFactory) (authorizer.Authorizer, authorizer.RuleResolver) {
 	a := &LocalAuthorizer{
 		roleLister:               versionedInformers.Rbac().V1().Roles().Lister(),
 		roleBindingLister:        versionedInformers.Rbac().V1().RoleBindings().Lister(),
@@ -60,6 +68,11 @@ func (a *LocalAuthorizer) RulesFor(user user.Info, namespace string) ([]authoriz
 func (a *LocalAuthorizer) Authorize(ctx context.Context, attr authorizer.Attributes) (authorized authorizer.Decision, reason string, err error) {
 	cluster, err := genericapirequest.ValidClusterFrom(ctx)
 	if err != nil {
+		kaudit.AddAuditAnnotations(
+			ctx,
+			LocalAuditDecision, DecisionNoOpinion,
+			LocalAuditReason, fmt.Sprintf("error getting cluster from request: %v", err),
+		)
 		return authorizer.DecisionNoOpinion, "", err
 	}
 	if cluster == nil || cluster.Name.Empty() {
@@ -80,5 +93,13 @@ func (a *LocalAuthorizer) Authorize(ctx context.Context, attr authorizer.Attribu
 		&rbac.ClusterRoleBindingLister{Lister: filteredInformer.ClusterRoleBindings().Lister()},
 	)
 
-	return scopedAuth.Authorize(ctx, attr)
+	dec, reason, err := scopedAuth.Authorize(ctx, attr)
+
+	kaudit.AddAuditAnnotations(
+		ctx,
+		LocalAuditDecision, decisionString(dec),
+		LocalAuditReason, fmt.Sprintf("cluster %q or bootstrap policy reason: %v", cluster.Name, reason),
+	)
+
+	return dec, reason, err
 }

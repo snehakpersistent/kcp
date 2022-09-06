@@ -28,13 +28,14 @@ import (
 	authserviceaccount "k8s.io/apiserver/pkg/authentication/serviceaccount"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	clientgoinformers "k8s.io/client-go/informers"
+	kubernetesinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/clusters"
 	"k8s.io/kubernetes/pkg/genericcontrolplane"
 	"k8s.io/kubernetes/plugin/pkg/auth/authorizer/rbac"
 
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
-	tenancyv1 "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
+	tenancyv1beta1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1beta1"
+	tenancylisters "github.com/kcp-dev/kcp/pkg/client/listers/tenancy/v1alpha1"
 	rbacwrapper "github.com/kcp-dev/kcp/pkg/virtual/framework/wrappers/rbac"
 )
 
@@ -48,7 +49,7 @@ const (
 // clusterworkspaces/content of the top-level workspace the request workspace is nested in. If one of
 // these verbs are admitted, the delegate authorizer is called. Otherwise, NoOpionion is returned if
 // the top-level workspace exists, and Deny otherwise.
-func NewTopLevelOrganizationAccessAuthorizer(versionedInformers clientgoinformers.SharedInformerFactory, clusterWorkspaceLister tenancyv1.ClusterWorkspaceLister, delegate authorizer.Authorizer) authorizer.Authorizer {
+func NewTopLevelOrganizationAccessAuthorizer(versionedInformers kubernetesinformers.SharedInformerFactory, clusterWorkspaceLister tenancylisters.ClusterWorkspaceLister, delegate authorizer.Authorizer) authorizer.Authorizer {
 	rootKubeInformer := rbacwrapper.FilterInformers(tenancyv1alpha1.RootCluster, versionedInformers.Rbac().V1())
 	bootstrapInformer := rbacwrapper.FilterInformers(genericcontrolplane.LocalAdminCluster, versionedInformers.Rbac().V1())
 
@@ -70,11 +71,21 @@ func NewTopLevelOrganizationAccessAuthorizer(versionedInformers clientgoinformer
 
 type topLevelOrgAccessAuthorizer struct {
 	rootAuthorizer         *rbac.RBACAuthorizer
-	clusterWorkspaceLister tenancyv1.ClusterWorkspaceLister
+	clusterWorkspaceLister tenancylisters.ClusterWorkspaceLister
 	delegate               authorizer.Authorizer
 }
 
 func (a *topLevelOrgAccessAuthorizer) Authorize(ctx context.Context, attr authorizer.Attributes) (authorized authorizer.Decision, reason string, err error) {
+	if IsDeepSubjectAccessReviewFrom(ctx, attr) {
+		kaudit.AddAuditAnnotations(
+			ctx,
+			TopLevelContentAuditDecision, DecisionAllowed,
+			TopLevelContentAuditReason, "deep SAR request",
+		)
+		// this is a deep SAR request, we have to skip the checks here and delegate to the subsequent authorizer.
+		return a.delegate.Authorize(ctx, attr)
+	}
+
 	cluster, err := genericapirequest.ValidClusterFrom(ctx)
 	if err != nil || cluster == nil || cluster.Name.Empty() {
 		kaudit.AddAuditAnnotations(
@@ -176,14 +187,13 @@ func (a *topLevelOrgAccessAuthorizer) Authorize(ctx context.Context, attr author
 		return authorizer.DecisionNoOpinion, WorkspaceAcccessNotPermittedReason, nil
 	case isUser:
 		workspaceAttr := authorizer.AttributesRecord{
-			User:        attr.GetUser(),
-			Verb:        "access",
-			APIGroup:    tenancyv1alpha1.SchemeGroupVersion.Group,
-			APIVersion:  tenancyv1alpha1.SchemeGroupVersion.Version,
-			Resource:    "workspaces",
-			Subresource: "content",
-			Name:        requestTopLevelOrgName,
-
+			User:            attr.GetUser(),
+			Verb:            "access",
+			APIGroup:        tenancyv1beta1.SchemeGroupVersion.Group,
+			APIVersion:      tenancyv1beta1.SchemeGroupVersion.Version,
+			Resource:        "workspaces",
+			Subresource:     "content",
+			Name:            requestTopLevelOrgName,
 			ResourceRequest: true,
 		}
 
@@ -226,16 +236,4 @@ func topLevelOrg(clusterName logicalcluster.Name) (string, bool) {
 		}
 		clusterName = parent
 	}
-}
-
-func decisionString(dec authorizer.Decision) string {
-	switch dec {
-	case authorizer.DecisionNoOpinion:
-		return DecisionNoOpinion
-	case authorizer.DecisionAllow:
-		return DecisionAllowed
-	case authorizer.DecisionDeny:
-		return DecisionDenied
-	}
-	return ""
 }

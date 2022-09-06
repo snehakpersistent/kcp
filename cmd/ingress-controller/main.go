@@ -21,13 +21,15 @@ import (
 	"os"
 	"time"
 
+	kcpclienthelper "github.com/kcp-dev/apimachinery/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v2"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
 	genericapiserver "k8s.io/apiserver/pkg/server"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
+	kubernetesinformers "k8s.io/client-go/informers"
+	kubernetesclient "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/component-base/config"
 	"k8s.io/component-base/logs"
@@ -78,12 +80,18 @@ func main() {
 				return err
 			}
 
-			kubeClient, err := kubernetes.NewClusterForConfig(configLoader)
+			kubeClient, err := kubernetesclient.NewForConfig(configLoader)
 			if err != nil {
 				return err
 			}
 
-			kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient.Cluster(logicalcluster.Wildcard), resyncPeriod)
+			kubeInformerConfig := kcpclienthelper.SetCluster(rest.CopyConfig(configLoader), logicalcluster.Wildcard)
+			kubeInformerClient, err := kubernetesclient.NewForConfig(kubeInformerConfig)
+			if err != nil {
+				return err
+			}
+
+			kubeInformerFactory := kubernetesinformers.NewSharedInformerFactory(kubeInformerClient, resyncPeriod)
 			ingressInformer := kubeInformerFactory.Networking().V1().Ingresses()
 			serviceInformer := kubeInformerFactory.Core().V1().Services()
 

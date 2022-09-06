@@ -33,7 +33,7 @@ YAML_PATCH_BIN := yaml-patch
 YAML_PATCH := $(TOOLS_DIR)/$(YAML_PATCH_BIN)-$(YAML_PATCH_VER)
 export YAML_PATCH # so hack scripts can use it
 
-OPENSHIFT_GOIMPORTS_VER := e3ded13788f820b9e4c79b44f7f8c63861100ac6
+OPENSHIFT_GOIMPORTS_VER := c72f1dc2e3aacfa00aece3391d938c9bc734e791
 OPENSHIFT_GOIMPORTS_BIN := openshift-goimports
 OPENSHIFT_GOIMPORTS := $(TOOLS_DIR)/$(OPENSHIFT_GOIMPORTS_BIN)-$(OPENSHIFT_GOIMPORTS_VER)
 export OPENSHIFT_GOIMPORTS # so hack scripts can use it
@@ -50,7 +50,12 @@ GOTESTSUM_VER := v1.8.1
 GOTESTSUM_BIN := gotestsum
 GOTESTSUM := $(abspath $(TOOLS_DIR))/$(GOTESTSUM_BIN)-$(GOTESTSUM_VER)
 
-ARCH ?= $(subst 64,,$(shell uname -p | sed s/x86_/amd/))64
+LOGCHECK_VER := v0.2.0
+LOGCHECK_BIN := logcheck
+LOGCHECK := $(TOOLS_GOBIN_DIR)/$(LOGCHECK_BIN)-$(LOGCHECK_VER)
+export LOGCHECK # so hack scripts can use it
+
+ARCH := $(subst 64,,$(shell uname -p | sed s/x86_/amd/))64
 OS := linux
 
 KUBE_MAJOR_VERSION := $(shell go mod edit -json | jq '.Require[] | select(.Path == "k8s.io/kubernetes") | .Version' --raw-output | sed 's/v\([0-9]*\).*/\1/')
@@ -112,11 +117,18 @@ $(GOLANGCI_LINT):
 $(STATICCHECK):
 	GOBIN=$(TOOLS_GOBIN_DIR) $(GO_INSTALL) honnef.co/go/tools/cmd/staticcheck $(STATICCHECK_BIN) $(STATICCHECK_VER)
 
-lint: $(GOLANGCI_LINT) $(STATICCHECK)
+$(LOGCHECK):
+	GOBIN=$(TOOLS_GOBIN_DIR) $(GO_INSTALL) sigs.k8s.io/logtools/logcheck $(LOGCHECK_BIN) $(LOGCHECK_VER)
+
+lint: $(GOLANGCI_LINT) $(STATICCHECK) $(LOGCHECK)
 	$(GOLANGCI_LINT) run --timeout=10m ./...
 	$(STATICCHECK) -checks ST1019,ST1005 ./...
-
+	./hack/verify-contextual-logging.sh
 .PHONY: lint
+
+update-contextual-logging: $(LOGCHECK)
+	UPDATE=true ./hack/verify-contextual-logging.sh
+.PHONY: update-contextual-logging
 
 vendor: ## Vendor the dependencies
 	go mod tidy
