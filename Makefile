@@ -96,7 +96,6 @@ build: require-jq require-go require-git verify-go-versions ## Build the project
 .PHONY: build-all
 build-all:
 	GOOS=$(OS) GOARCH=$(ARCH) $(MAKE) build WHAT=./cmd/...
-	date
 
 .PHONY: build-kind-images
 build-kind-images-ko: require-ko
